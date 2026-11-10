@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { Orden, OrdenStatus } from '../entities/orden.entity';
@@ -13,6 +13,7 @@ import { registrarV2 } from '../../comun/v2/registro-v2';
 import { isoGuayaquil } from '../../comun/v2/reloj';
 import { nochesDe } from '../../disponibilidad/disponibilidad.puerto';
 import { AvisoStock, SagaReservaService } from './saga-reserva.service';
+import { BookingCheckinClient } from './booking-checkin.client';
 import { CONEXION } from '../../../database/conexiones';
 
 // Estancia del contrato v2 (§4):
@@ -32,12 +33,13 @@ export class EstanciaV2Service {
     private readonly ordenes: OrdenesV2Service,
     private readonly eventos: EventosService,
     private readonly sagas: SagaReservaService,
+    @Optional() private readonly bookingClient?: BookingCheckinClient,
   ) {}
 
   // ───────────────────────── POST /orders/{ref}/check-in ─────────────────────────
   async checkIn(ref: string, dto: CheckInV2Dto, principal: PrincipalV2, ahora: Date, correlacion: string | null) {
     const encontrada = await this.ordenes.localizar(ref, principal);
-    return this.dataSource.transaction(async (manager) => {
+    const resultadoLocal = await this.dataSource.transaction(async (manager) => {
       const orden = await this.bloquear(manager, encontrada);
       if (orden.status !== OrdenStatus.CONFIRMED) {
         throw new ProblemaV2Exception(409, 'INVALID_STATE_TRANSITION', `No se puede hacer check-in de una reserva en estado ${orden.status}.`);
@@ -98,6 +100,36 @@ export class EstanciaV2Service {
         _links: { self: { href: base, method: 'GET' }, checkOut: { href: `${base}/checkout`, method: 'POST' } },
       };
     });
+
+    // Notificación saliente a Booking (Paso 5): disparada SOLO tras confirmar localmente con éxito
+    if (this.bookingClient) {
+      try {
+        const ninos = Array.isArray(encontrada.guests?.children) ? (encontrada.guests.children as number[]).length : 0;
+        const adultos = Number(encontrada.guests?.number_of_adults ?? 1);
+        const huespedesReales = Math.max(1, adultos + ninos);
+
+        const payloadBooking = this.bookingClient.construirPayload({
+          external_order_id: `ORD-HTL-${encontrada.locator}`,
+          client_id: encontrada.clienteId ?? encontrada.id,
+          huespedes_reales: huespedesReales,
+          admin_id: principal.usuarioId ?? 'admin-recepcion',
+          fecha_checkin: ahora,
+          observaciones: dto.peticionesEspeciales ?? null,
+        });
+
+        const resBooking = await this.bookingClient.notificarCheckin(payloadBooking, correlacion);
+        await this.bookingClient.guardarResultado(encontrada.id, payloadBooking, resBooking, correlacion);
+      } catch (err) {
+        await this.bookingClient.guardarResultado(
+          encontrada.id,
+          null,
+          { exito: false, error: (err as Error).message },
+          correlacion,
+        );
+      }
+    }
+
+    return resultadoLocal;
   }
 
   // ───────────────────────── PUT /orders/{ref}/early-checkin ─────────────────────────

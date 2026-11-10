@@ -24,6 +24,7 @@ import { OrdenesV2Service } from './v2/ordenes-v2.service';
 import { PromocionesV2Service } from './v2/promociones-v2.service';
 import { ResenasV2Service } from './v2/resenas-v2.service';
 import { SagaReservaService } from './v2/saga-reserva.service';
+import { BookingCheckinClient } from './v2/booking-checkin.client';
 import { CONEXION } from '../../database/conexiones';
 
 // Dominio reservas (fase 8.0 / 9.2): órdenes v1 y v2, idempotencia, estancia (check-in / check-out), reseñas y el acuerdo
@@ -34,7 +35,7 @@ import { CONEXION } from '../../database/conexiones';
   imports: [TypeOrmModule.forFeature([Orden, OrdenPreview, IdempotencyKey, IdempotenciaV2, Resena, PromocionContrato, SagaReserva], CONEXION.reservas), CommonModule, SeguridadUsuariosModule],
   // OrdenesV2Controller tiene /alojamientos/orders y /reservations: se registra antes que las rutas /alojamientos/{id}
   controllers: [OrdenesV1Controller, OrdenesV2Controller, PromocionesV2Controller, ResenasV2Controller, ReservasAdminController, CuentaReservasController, ReservasPuertoController],
-  providers: [OrdenesService, OrdenesV2Service, EstanciaV2Service, PromocionesV2Service, ResenasV2Service, IdempotenciaV2Service, AccesoReservasService, LimpiezaReservasService, SagaReservaService],
-  exports: [OrdenesService, PromocionesV2Service, LimpiezaReservasService],
+  providers: [OrdenesService, OrdenesV2Service, EstanciaV2Service, PromocionesV2Service, ResenasV2Service, IdempotenciaV2Service, AccesoReservasService, LimpiezaReservasService, SagaReservaService, BookingCheckinClient],
+  exports: [OrdenesService, PromocionesV2Service, LimpiezaReservasService, BookingCheckinClient],
 })
 export class ReservasModule {}
