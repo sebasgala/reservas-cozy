@@ -13,6 +13,8 @@ export interface NotificarCheckinBookingRequest {
 
 export interface ResultadoNotificacionBooking {
   exito: boolean;
+  /** true si no se intentó el envío porque la notificación está deshabilitada (sin clave); no es un fallo a reintentar */
+  omitido?: boolean;
   estadoHttp?: number;
   respuesta?: unknown;
   error?: string;
@@ -42,17 +44,28 @@ export interface ParametrosCheckinBooking {
 
 export const TEXTO_OBSERVACIONES_POR_DEFECTO = 'Check-in confirmado localmente';
 
+export interface ConfiguracionBooking {
+  /** false si en producción falta la clave: solo se deshabilita la notificación de check-in, el servicio arranca igual */
+  habilitada: boolean;
+  aviso?: string;
+}
+
 /**
- * Valida la configuración de entorno para Booking.
- * Si falta BOOKING_API_KEY en producción (NODE_ENV=production), la app no debe arrancar.
+ * Evalúa la configuración de entorno para Booking. No impide el arranque: si en producción (NODE_ENV=production)
+ * falta BOOKING_CHECKIN_KEY (o BOOKING_API_KEY), devuelve habilitada=false con el aviso para el log.
  */
-export function validarConfiguracionBooking(env: NodeJS.ProcessEnv = process.env): void {
+export function validarConfiguracionBooking(env: NodeJS.ProcessEnv = process.env): ConfiguracionBooking {
   if (env.NODE_ENV === 'production') {
     const clave = env.BOOKING_CHECKIN_KEY || env.BOOKING_API_KEY;
     if (!clave || clave.trim() === '') {
-      throw new Error('Configuración inválida en producción: falta la variable BOOKING_CHECKIN_KEY (o BOOKING_API_KEY).');
+      return {
+        habilitada: false,
+        aviso:
+          'Falta BOOKING_CHECKIN_KEY (o BOOKING_API_KEY): la notificación de check-in a Booking queda deshabilitada. El servicio arranca igual.',
+      };
     }
   }
+  return { habilitada: true };
 }
 
 /**
@@ -100,8 +113,16 @@ export class BookingCheckinClient implements OnModuleInit {
     @Optional() private readonly apiKeyCustom?: string,
   ) {}
 
+  private notificacionHabilitada = true;
+
   onModuleInit(): void {
-    validarConfiguracionBooking(process.env);
+    const config = validarConfiguracionBooking(process.env);
+    this.notificacionHabilitada = config.habilitada;
+    if (!config.habilitada) this.log.warn(config.aviso);
+  }
+
+  get habilitada(): boolean {
+    return this.notificacionHabilitada;
   }
 
   get bookingUrl(): string {
@@ -121,6 +142,15 @@ export class BookingCheckinClient implements OnModuleInit {
     correlacionId?: string | null,
     fetchFn: typeof fetch = fetch,
   ): Promise<ResultadoNotificacionBooking> {
+    if (!this.notificacionHabilitada) {
+      registrarV2('warn', 'booking_checkin_omitido', {
+        correlationId: correlacionId,
+        external_order_id: payload.external_order_id,
+        motivo: 'sin_clave_booking',
+      });
+      return { exito: false, omitido: true, error: 'Notificación a Booking deshabilitada: falta BOOKING_CHECKIN_KEY.' };
+    }
+
     const base = this.bookingUrl.replace(/\/+$/, '');
     const url = `${base}/api/v2/reservas/${encodeURIComponent(payload.external_order_id)}/checkin`;
 

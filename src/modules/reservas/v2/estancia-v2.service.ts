@@ -118,7 +118,10 @@ export class EstanciaV2Service {
         });
 
         const resBooking = await this.bookingClient.notificarCheckin(payloadBooking, correlacion);
-        await this.bookingClient.guardarResultado(encontrada.id, payloadBooking, resBooking, correlacion);
+        // Notificación deshabilitada (sin clave): no es un fallo, no se deja reintento pendiente
+        if (!resBooking.omitido) {
+          await this.bookingClient.guardarResultado(encontrada.id, payloadBooking, resBooking, correlacion);
+        }
       } catch (err) {
         await this.bookingClient.guardarResultado(
           encontrada.id,

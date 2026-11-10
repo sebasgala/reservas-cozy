@@ -13,29 +13,95 @@ import { OrdenStatus } from '../entities/orden.entity';
 describe('Paso 5: Cliente saliente de check-in hacia Booking', () => {
   // ───────────────────────── 1. Headers y Configuración ─────────────────────────
   describe('Headers y validación de variables de entorno', () => {
-    it('en producción, si falta BOOKING_CHECKIN_KEY (o BOOKING_API_KEY) lanza error y no arranca', () => {
-      assert.throws(
-        () => validarConfiguracionBooking({ NODE_ENV: 'production', BOOKING_API_KEY: '', BOOKING_CHECKIN_KEY: '' }),
-        /Configuración inválida en producción: falta la variable BOOKING_CHECKIN_KEY/,
+    it('en producción, si falta BOOKING_CHECKIN_KEY (o BOOKING_API_KEY) no lanza error: deshabilita la notificación y da un aviso', () => {
+      for (const env of [
+        { NODE_ENV: 'production', BOOKING_API_KEY: '', BOOKING_CHECKIN_KEY: '' },
+        { NODE_ENV: 'production' },
+        { NODE_ENV: 'production', BOOKING_CHECKIN_KEY: '   ' },
+      ]) {
+        let config: ReturnType<typeof validarConfiguracionBooking> | undefined;
+        assert.doesNotThrow(() => {
+          config = validarConfiguracionBooking(env);
+        });
+        assert.equal(config?.habilitada, false);
+        assert.match(config?.aviso ?? '', /BOOKING_CHECKIN_KEY/);
+      }
+    });
+
+    it('en producción con BOOKING_CHECKIN_KEY o BOOKING_API_KEY configurada la notificación queda habilitada', () => {
+      assert.equal(
+        validarConfiguracionBooking({ NODE_ENV: 'production', BOOKING_CHECKIN_KEY: 'booking-secret-key-1234' }).habilitada,
+        true,
       );
-      assert.throws(
-        () => validarConfiguracionBooking({ NODE_ENV: 'production' }),
-        /Configuración inválida en producción: falta la variable BOOKING_CHECKIN_KEY/,
+      assert.equal(
+        validarConfiguracionBooking({ NODE_ENV: 'production', BOOKING_API_KEY: 'booking-secret-key-1234' }).habilitada,
+        true,
       );
     });
 
-    it('en producción con BOOKING_CHECKIN_KEY o BOOKING_API_KEY configurada pasa la validación', () => {
-      assert.doesNotThrow(() =>
-        validarConfiguracionBooking({ NODE_ENV: 'production', BOOKING_CHECKIN_KEY: 'booking-secret-key-1234' }),
-      );
-      assert.doesNotThrow(() =>
-        validarConfiguracionBooking({ NODE_ENV: 'production', BOOKING_API_KEY: 'booking-secret-key-1234' }),
-      );
+    it('en desarrollo o test no exige BOOKING_API_KEY y la notificación sigue habilitada', () => {
+      assert.equal(validarConfiguracionBooking({ NODE_ENV: 'test' }).habilitada, true);
+      assert.equal(validarConfiguracionBooking({ NODE_ENV: 'development' }).habilitada, true);
     });
 
-    it('en desarrollo o test no exige BOOKING_API_KEY para arrancar', () => {
-      assert.doesNotThrow(() => validarConfiguracionBooking({ NODE_ENV: 'test' }));
-      assert.doesNotThrow(() => validarConfiguracionBooking({ NODE_ENV: 'development' }));
+    it('onModuleInit en producción sin clave no lanza, avisa en el log y deshabilita solo la notificación (sin llamar a Booking)', async () => {
+      const guardado = { NODE_ENV: process.env.NODE_ENV, K: process.env.BOOKING_CHECKIN_KEY, A: process.env.BOOKING_API_KEY };
+      process.env.NODE_ENV = 'production';
+      delete process.env.BOOKING_CHECKIN_KEY;
+      delete process.env.BOOKING_API_KEY;
+      try {
+        const cliente = new BookingCheckinClient('http://mock-booking.local');
+        const avisos: string[] = [];
+        (cliente as any).log.warn = (m: string) => avisos.push(String(m));
+
+        assert.doesNotThrow(() => cliente.onModuleInit());
+        assert.equal(avisos.length, 1);
+        assert.match(avisos[0], /BOOKING_CHECKIN_KEY/);
+        assert.equal(cliente.habilitada, false);
+
+        let llamadasFetch = 0;
+        const mockFetch: typeof fetch = (async () => {
+          llamadasFetch += 1;
+          return new Response('{}', { status: 200 });
+        }) as unknown as typeof fetch;
+        const payload = cliente.construirPayload({
+          external_order_id: 'ORD-HTL-7001',
+          client_id: 'c1234567-0000-0000-0000-000000000003',
+          huespedes_reales: 2,
+          admin_id: 'adm-01',
+          fecha_checkin: new Date('2026-11-09T14:00:00-05:00'),
+        });
+        const res = await cliente.notificarCheckin(payload, null, mockFetch);
+        assert.equal(res.exito, false);
+        assert.equal(res.omitido, true);
+        assert.equal(llamadasFetch, 0);
+        assert.equal(cliente.obtenerReintentosPendientes().length, 0);
+      } finally {
+        for (const [k, v] of [['NODE_ENV', guardado.NODE_ENV], ['BOOKING_CHECKIN_KEY', guardado.K], ['BOOKING_API_KEY', guardado.A]] as const) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    });
+
+    it('onModuleInit en producción con clave deja la notificación habilitada y sin aviso', () => {
+      const previa = process.env.BOOKING_CHECKIN_KEY;
+      const previaEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      process.env.BOOKING_CHECKIN_KEY = 'clave-de-prueba-1234';
+      try {
+        const cliente = new BookingCheckinClient('http://mock-booking.local');
+        const avisos: string[] = [];
+        (cliente as any).log.warn = (m: string) => avisos.push(String(m));
+        cliente.onModuleInit();
+        assert.equal(cliente.habilitada, true);
+        assert.equal(avisos.length, 0);
+      } finally {
+        if (previa === undefined) delete process.env.BOOKING_CHECKIN_KEY;
+        else process.env.BOOKING_CHECKIN_KEY = previa;
+        if (previaEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = previaEnv;
+      }
     });
 
     it('envía los headers Content-Type application/json y X-API-Key en la petición saliente', async () => {
@@ -288,6 +354,63 @@ describe('Paso 5: Cliente saliente de check-in hacia Booking', () => {
       assert.equal(resultadosReintento[0].codigoHttp, 200);
 
       // Ya no quedan reintentos pendientes
+      assert.equal(bookingClient.obtenerReintentosPendientes().length, 0);
+    });
+
+    it('con la notificación deshabilitada (sin clave en producción) el check-in local se completa y no queda reintento pendiente', async () => {
+      const ordenMock: any = {
+        id: 'ord-uuid-local-456',
+        locator: '9001',
+        status: OrdenStatus.CONFIRMED,
+        alojamientoId: 10,
+        alojamientoCodigo: 'HTL-UIO-01',
+        habitacionCodigo: 'STD',
+        habitacionNombre: 'Habitación Estándar',
+        checkin: '2026-11-09',
+        checkout: '2026-11-12',
+        huespedTitular: { identificacion: '1712345678' },
+        guests: { number_of_adults: 2, children: [] },
+        clienteId: 'cli-uuid-999',
+        earlyCheckinAutorizado: false,
+      };
+      const managerMock: any = {
+        save: async (o: any) => Object.assign(ordenMock, o),
+        getRepository: () => ({
+          createQueryBuilder: () => ({ setLock: () => ({ where: () => ({ getOne: async () => ordenMock }) }) }),
+        }),
+      };
+      const dataSourceMock: any = { transaction: async (cb: (m: any) => Promise<any>) => cb(managerMock) };
+
+      const bookingClient = new BookingCheckinClient('http://mock-booking.local');
+      (bookingClient as any).log.warn = () => {};
+      (bookingClient as any).notificacionHabilitada = false;
+      let llamadasBooking = 0;
+      const notificarOriginal = bookingClient.notificarCheckin.bind(bookingClient);
+      bookingClient.notificarCheckin = (p, c, f) => {
+        llamadasBooking += 1;
+        return notificarOriginal(p, c, f);
+      };
+
+      const estanciaService = new EstanciaV2Service(
+        dataSourceMock,
+        { localizar: async () => ordenMock } as any,
+        { emitir: async () => {} } as any,
+        {} as any,
+        bookingClient,
+      );
+
+      const resultado = await estanciaService.checkIn(
+        'ORD-HTL-9001',
+        { titularIdentificacion: '1712345678' },
+        { rol: 'ADMIN', usuarioId: 'admin-recepcionista', via: 'usuario' },
+        new Date('2026-11-09T19:30:00.000Z'),
+        'corr-sin-clave-test',
+      );
+
+      assert.equal(resultado.estado, 'CHECKED_IN');
+      assert.equal(ordenMock.status, OrdenStatus.CHECKED_IN);
+      assert.equal(llamadasBooking, 1);
+      assert.equal(bookingClient.obtenerRegistro('ord-uuid-local-456'), undefined);
       assert.equal(bookingClient.obtenerReintentosPendientes().length, 0);
     });
   });
