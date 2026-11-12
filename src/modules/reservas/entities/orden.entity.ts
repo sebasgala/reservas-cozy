@@ -223,6 +223,10 @@ export class Orden {
   @Column({ type: 'varchar', length: 100, nullable: true })
   habitacionAsignada: string | null;
 
+  // UUID de la habitación física asignada en el check-in (solo cuando controla_limpieza=true)
+  @Column({ type: 'uuid', nullable: true })
+  habitacionFisicaId: string | null;
+
   // Credencial secreta (x-secret): nunca a logs ni eventos. Se borra en el check-out.
   @Column({ type: 'varchar', length: 40, nullable: true })
   claveAccesoDigital: string | null;

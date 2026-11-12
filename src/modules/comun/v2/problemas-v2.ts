@@ -29,7 +29,8 @@ export type CodigoErrorV2 =
   | 'INTERNAL_ERROR'
   | 'RESTRICTION_VIOLATED'
   | 'UNSUPPORTED_CURRENCY'
-  | 'INSUFFICIENT_SCOPE';
+  | 'INSUFFICIENT_SCOPE'
+  | 'ROOM_NOT_AVAILABLE';
 
 export interface ParametroInvalido {
   name: string;

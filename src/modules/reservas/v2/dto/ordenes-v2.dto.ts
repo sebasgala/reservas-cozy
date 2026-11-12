@@ -16,6 +16,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ID_ALOJAMIENTO, OcupantesV2Dto } from '../../../disponibilidad/disponibilidad.puerto';
@@ -216,7 +217,8 @@ export class CancelarOrdenV2Dto {
   @MaxLength(300)
   motivo?: string;
 
-  @IsOptional()
+  // undefined → default CLIENTE; null → 400 (el enum no lo admite)
+  @ValidateIf((o) => o.solicitadoPor !== undefined)
   @IsIn(['SAGA_ORCHESTRATOR', 'CLIENTE', 'ADMIN', 'HOTEL'])
   solicitadoPor?: 'SAGA_ORCHESTRATOR' | 'CLIENTE' | 'ADMIN' | 'HOTEL';
 }

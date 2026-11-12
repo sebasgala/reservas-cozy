@@ -24,6 +24,8 @@ export interface PrincipalV2 {
   usuarioId?: string;
   // Un administrador solo ve las órdenes de sus alojamientos; el superadmin, todas
   superadmin?: boolean;
+  // Bloque R: alojamiento del token; filtra sin consultar el catálogo
+  alojamientoId?: number | null;
   // Con qué credencial entró (decide qué operaciones admite) y, si fue OAuth2, sus scopes
   via: 'apikey' | 'oauth' | 'usuario';
   scopes?: string[];
@@ -108,7 +110,7 @@ export class AutenticacionV2Service {
       // Fase 8.1: firma y vencimiento del token (10 minutos); no se lee la cuenta
       const usuario = await this.auth.sesionDelToken(req.headers.authorization, ahoraDelTokenDePrueba(req));
       if (usuario.rol === RolUsuario.CLIENTE) return { rol: 'CLIENTE', usuarioId: usuario.id, via: 'usuario' };
-      return { rol: 'ADMIN', usuarioId: usuario.id, superadmin: usuario.rol === RolUsuario.SUPERADMIN, via: 'usuario' };
+      return { rol: 'ADMIN', usuarioId: usuario.id, superadmin: usuario.rol === RolUsuario.SUPERADMIN, alojamientoId: usuario.alojamientoId ?? null, via: 'usuario' };
     } catch (error) {
       // Los errores de la v1 (token inválido o vencido) se traducen a los códigos del contrato
       if (error instanceof HttpException && error.getStatus() === 403) {

@@ -33,4 +33,4 @@ EXPOSE 3004
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT_RESERVAS||process.env.PORT||3004)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["node", "dist/main.js"]
+CMD ["sh", "-c", "node node_modules/typeorm/cli.js -d dist/database/data-source.js migration:run && exec node dist/main.js"]

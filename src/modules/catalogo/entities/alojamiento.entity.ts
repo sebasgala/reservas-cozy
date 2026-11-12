@@ -109,6 +109,10 @@ export class Alojamiento {
   @Column({ type: 'varchar', length: 5, default: '11:00' })
   checkOutMaxima: string;
 
+  // Bloque R: si true, el check-in exige habitación física LIMPIA asignada. Se activa al registrar la primera habitación.
+  @Column({ name: 'controla_limpieza', type: 'boolean', default: false })
+  controlaLimpieza: boolean;
+
   @UpdateDateColumn({ type: 'timestamptz' })
   updatedAt: Date;
 }

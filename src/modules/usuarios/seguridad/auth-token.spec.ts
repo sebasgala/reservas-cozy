@@ -11,7 +11,7 @@ import { construirOpcionesJwt } from './claves-jwt';
 
 const ID = '3f2b8f1e-5c1d-4e0a-9d6b-0a1b2c3d4e5f';
 const cuenta = (extra: Partial<Usuario> = {}): Usuario =>
-  ({ id: ID, email: 'ana@prueba.test', nombre: 'Ana', apellido: 'Pérez', rol: RolUsuario.CLIENTE, estado: EstadoUsuario.ACTIVO, createdAt: new Date('2026-11-01T00:00:00Z'), ...extra }) as Usuario;
+  ({ id: ID, email: 'ana@prueba.test', nombre: 'Ana', apellido: 'Pérez', rol: RolUsuario.CLIENTE, estado: EstadoUsuario.ACTIVO, alojamientoId: null, requiereCambioClave: false, createdAt: new Date('2026-11-01T00:00:00Z'), ...extra }) as Usuario;
 
 // Repositorio de mentira: cuenta cuántas veces se lo consulta
 function servicio(actual: Usuario | null) {
@@ -59,7 +59,7 @@ describe('token de la cuenta (fase 8.1)', () => {
     const { access_token } = await auth.renovar(ID);
     assert.equal(lecturas.n, 1); // la renovación sí la lee
     const sesion = await auth.sesionDelToken(bearer(access_token));
-    assert.deepEqual(sesion, { id: ID, rol: RolUsuario.CLIENTE, estado: EstadoUsuario.ACTIVO });
+    assert.deepEqual(sesion, { id: ID, rol: RolUsuario.CLIENTE, estado: EstadoUsuario.ACTIVO, alojamientoId: null });
     assert.equal(lecturas.n, 1); // validar no agregó ninguna lectura
   });
 
@@ -151,7 +151,7 @@ describe('token de la cuenta (fase 8.1)', () => {
     assert.equal(cabeceraJwt.alg, 'RS256');
 
     const sesion = await authOtroModulo.sesionDelToken(bearer(access_token));
-    assert.deepEqual(sesion, { id: ID, rol: RolUsuario.ADMINISTRADOR, estado: EstadoUsuario.ACTIVO });
+    assert.deepEqual(sesion, { id: ID, rol: RolUsuario.ADMINISTRADOR, estado: EstadoUsuario.ACTIVO, alojamientoId: null });
 
     // Un módulo que solo verifica no tiene clave privada y no puede emitir tokens
     await assert.rejects(() => jwtOtroModulo.signAsync({ sub: ID, rol: 'cliente', estado: 'activo' }));

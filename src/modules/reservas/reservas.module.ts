@@ -3,9 +3,16 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from '../../common/common.module';
 import { SeguridadUsuariosModule } from '../usuarios/usuarios.module';
 import { AccesoReservasService } from './admin/acceso-reservas.service';
+import { HabitacionesFisicasController } from './admin/habitaciones-fisicas.controller';
+import { HabitacionesFisicasService } from './admin/habitaciones-fisicas.service';
+import { RecepcionController } from './admin/recepcion.controller';
+import { RecepcionService } from './admin/recepcion.service';
 import { ReservasAdminController } from './admin/reservas-admin.controller';
 import { ReservasPuertoController } from './admin/reservas-vigentes.http';
 import { CuentaReservasController } from './cuenta-reservas.controller';
+import { AuditoriaRecepcion } from './entities/auditoria-recepcion.entity';
+import { HabitacionFisica } from './entities/habitacion-fisica.entity';
+import { HistorialLimpieza } from './entities/historial-limpieza.entity';
 import { IdempotenciaV2 } from './entities/idempotencia-v2.entity';
 import { IdempotencyKey } from './entities/idempotency-key.entity';
 import { OrdenPreview } from './entities/orden-preview.entity';
@@ -32,10 +39,40 @@ import { CONEXION } from '../../database/conexiones';
 // (locales en el monolito o HTTP en el proceso separado).
 @Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([Orden, OrdenPreview, IdempotencyKey, IdempotenciaV2, Resena, PromocionContrato, SagaReserva], CONEXION.reservas), CommonModule, SeguridadUsuariosModule],
+  imports: [
+    TypeOrmModule.forFeature(
+      [Orden, OrdenPreview, IdempotencyKey, IdempotenciaV2, Resena, PromocionContrato, SagaReserva, AuditoriaRecepcion, HabitacionFisica, HistorialLimpieza],
+      CONEXION.reservas,
+    ),
+    CommonModule,
+    SeguridadUsuariosModule,
+  ],
   // OrdenesV2Controller tiene /alojamientos/orders y /reservations: se registra antes que las rutas /alojamientos/{id}
-  controllers: [OrdenesV1Controller, OrdenesV2Controller, PromocionesV2Controller, ResenasV2Controller, ReservasAdminController, CuentaReservasController, ReservasPuertoController],
-  providers: [OrdenesService, OrdenesV2Service, EstanciaV2Service, PromocionesV2Service, ResenasV2Service, IdempotenciaV2Service, AccesoReservasService, LimpiezaReservasService, SagaReservaService, BookingCheckinClient],
+  controllers: [
+    OrdenesV1Controller,
+    OrdenesV2Controller,
+    PromocionesV2Controller,
+    ResenasV2Controller,
+    ReservasAdminController,
+    CuentaReservasController,
+    ReservasPuertoController,
+    RecepcionController,
+    HabitacionesFisicasController,
+  ],
+  providers: [
+    OrdenesService,
+    OrdenesV2Service,
+    EstanciaV2Service,
+    PromocionesV2Service,
+    ResenasV2Service,
+    IdempotenciaV2Service,
+    AccesoReservasService,
+    LimpiezaReservasService,
+    SagaReservaService,
+    BookingCheckinClient,
+    RecepcionService,
+    HabitacionesFisicasService,
+  ],
   exports: [OrdenesService, PromocionesV2Service, LimpiezaReservasService, BookingCheckinClient],
 })
 export class ReservasModule {}

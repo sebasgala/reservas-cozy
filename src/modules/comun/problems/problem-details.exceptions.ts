@@ -24,7 +24,10 @@ export type CodigoProblema =
   | 'CANCELLATION_NOT_ALLOWED'
   | 'RATE_LIMIT_EXCEEDED'
   | 'PAYMENT_REFERENCE_INVALID'
-  | 'PAYMENT_NOT_AUTHORIZED';
+  | 'PAYMENT_NOT_AUTHORIZED'
+  | 'INVALID_STATE_TRANSITION'
+  | 'CHECKIN_TIME_NOT_REACHED'
+  | 'ROOM_NOT_AVAILABLE';
 
 // 400 con la lista de parámetros inválidos ya armada (validaciones que no hace class-validator).
 export class ConsultaInvalidaException extends BadRequestException {

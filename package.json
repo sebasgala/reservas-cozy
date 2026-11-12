@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "start:prod": "node dist/main.js"
+    "start:prod": "node dist/main.js",
+    "test": "node -e \"require('fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.json --outDir dist-test --incremental false && node --test \"dist-test/**/*.spec.js\""
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.12.6",

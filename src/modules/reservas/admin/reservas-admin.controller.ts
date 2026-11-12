@@ -7,6 +7,7 @@ import { OrdenesService } from '../ordenes.service';
 import { ProblemDetailsFilter } from '../../comun/problems/problem-details.filter';
 import { respuestaProblema } from '../../comun/problems/respuestas-swagger';
 import { idUuid, validacionAdmin } from '../../comun/problems/validacion.pipes';
+import { AislamientoAlojamientoGuard } from '../../usuarios/seguridad/aislamiento-alojamiento.guard';
 import { JwtAuthGuard } from '../../usuarios/seguridad/jwt-auth.guard';
 import { Roles, UsuarioActual } from '../../usuarios/seguridad/roles.decorator';
 import { RolesGuard } from '../../usuarios/seguridad/roles.guard';
@@ -18,7 +19,7 @@ const R403 = respuestaProblema(403, 'FORBIDDEN: se necesita rol administrador o 
 // Reservas vistas por el administrador: solo las de SUS alojamientos (el superadmin, todas).
 @ApiTags('Interno - Admin')
 @ApiBearerAuth('JWT')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, AislamientoAlojamientoGuard)
 @Roles(RolUsuario.ADMINISTRADOR, RolUsuario.SUPERADMIN)
 @UsePipes(validacionAdmin())
 @UseFilters(ProblemDetailsFilter)
@@ -36,10 +37,9 @@ export class ReservasAdminController {
   @ApiResponse(R401)
   @ApiResponse(R403)
   listar(@Query() filtro: FiltroReservasAdminQueryDto, @UsuarioActual() usuario: Usuario) {
-    // propietarioId = null => sin filtro por dueño (superadmin).
     return this.ordenesService.listarDeAlojamientos(
       this.acceso.propietarioDelFiltro(usuario) ?? null,
-      { estado: filtro.estado, alojamientoId: filtro.alojamientoId },
+      { estado: filtro.estado, alojamientoId: this.acceso.alojamientoDelFiltro(usuario, filtro.alojamientoId) },
       filtro.page ?? 1,
       filtro.limit ?? 10,
     );

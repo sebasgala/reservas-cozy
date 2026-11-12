@@ -15,6 +15,7 @@ import { nochesDe } from '../../disponibilidad/disponibilidad.puerto';
 import { AvisoStock, SagaReservaService } from './saga-reserva.service';
 import { BookingCheckinClient } from './booking-checkin.client';
 import { CONEXION } from '../../../database/conexiones';
+import { HabitacionesFisicasService } from '../admin/habitaciones-fisicas.service';
 
 // Estancia del contrato v2 (§4):
 //   POST /orders/{ref}/check-in       solo CONFIRMED y desde las 14:00 de Guayaquil del día de llegada (o con early check-in)
@@ -33,6 +34,7 @@ export class EstanciaV2Service {
     private readonly ordenes: OrdenesV2Service,
     private readonly eventos: EventosService,
     private readonly sagas: SagaReservaService,
+    private readonly habitacionesFisicas: HabitacionesFisicasService,
     @Optional() private readonly bookingClient?: BookingCheckinClient,
   ) {}
 
@@ -62,8 +64,20 @@ export class EstanciaV2Service {
         throw reglaDeNegocio('VALIDATION_FAILED', `El check-in solo se puede hacer hasta el ${orden.checkout}: la estancia terminó.`, [{ name: 'orderId', reason: `la ventana de check-in cerró el ${orden.checkout}` }]);
       }
 
+      // Bloque R: si el alojamiento controla limpieza, exigir habitación LIMPIA disponible
+      const controlaLimpieza = await this.habitacionesFisicas.verificaControlaLimpieza(manager, orden.alojamientoId);
+      let habitacionFisicaAsignada: string | null = null;
+      if (controlaLimpieza) {
+        const hf = await this.habitacionesFisicas.buscarLimpia(manager, orden.alojamientoId, orden.habitacionId);
+        if (!hf) {
+          throw new ProblemaV2Exception(409, 'ROOM_NOT_AVAILABLE', 'No hay habitaciones limpias disponibles para este tipo de habitación. Consulta con recepción.');
+        }
+        habitacionFisicaAsignada = hf.id;
+      }
+
       orden.status = OrdenStatus.CHECKED_IN;
       orden.checkInEn = ahora;
+      orden.habitacionFisicaId = habitacionFisicaAsignada;
       orden.habitacionAsignada = etiquetaHabitacion(orden.habitacionNombre, orden.id);
       orden.claveAccesoDigital = generarClaveDigital();
       if (dto.peticionesEspeciales) {
@@ -176,6 +190,10 @@ export class EstanciaV2Service {
       orden.metodoPagoConsumos = consumos.length > 0 ? (dto.metodoPagoConsumos ?? 'CARGO_A_RESERVA') : null;
       orden.claveAccesoDigital = null; // revocada
       await manager.save(orden);
+      // Bloque R: si había habitación física asignada, marcarla como SUCIA en la misma transacción
+      if (orden.habitacionFisicaId) {
+        await this.habitacionesFisicas.marcarSucia(manager, orden.habitacionFisicaId, orden.id);
+      }
       // La habitación se libera: Booking recibe el stock de las noches que quedan (las pasadas no se avisan), pero solo cuando
       // esta transacción se confirme
       pendiente.aviso = { habitacion, fechas: nochesDe(orden.checkin, orden.checkout), motivo: 'ESTADO', ordenId: orden.id, correlacion };

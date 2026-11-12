@@ -312,10 +312,14 @@ export class OrdenesV2Service {
     if (q.estado) consulta.andWhere('o.status = :estado', { estado: q.estado });
     if (q.creadoDesde) consulta.andWhere('o.createdAt >= :desde', { desde: q.creadoDesde });
     if (q.creadoHasta) consulta.andWhere('o.createdAt <= :hasta', { hasta: q.creadoHasta });
-    // Un administrador ve las de sus alojamientos (cuáles son lo dice el catálogo)
+    // Un administrador ve las de sus alojamientos (Bloque R: del token; sin él, del catálogo)
     if (principal.rol === 'ADMIN' && !principal.superadmin) {
-      const suyos = await this.catalogo.idsDeAlojamientosDe(principal.usuarioId);
-      consulta.andWhere(suyos.length ? 'o.alojamientoId IN (:...suyos)' : '1 = 0', { suyos });
+      if (principal.alojamientoId != null) {
+        consulta.andWhere('o.alojamientoId = :propio', { propio: principal.alojamientoId });
+      } else {
+        const suyos = await this.catalogo.idsDeAlojamientosDe(principal.usuarioId);
+        consulta.andWhere(suyos.length ? 'o.alojamientoId IN (:...suyos)' : '1 = 0', { suyos });
+      }
     }
     const [ordenes, total] = await consulta
       .orderBy('o.createdAt', 'DESC')
@@ -372,9 +376,7 @@ export class OrdenesV2Service {
       const totalCentavos = aCentavos(Number(orden.totalPrice));
 
       if (orden.status === OrdenStatus.CANCELLED) {
-        // Ya cancelada (también si se canceló por la v1): mismo código de reembolso en cada reintento. Si la canceló la
-        // compensación de la saga (8.4), Cozy nunca la confirmó: sigue COMPENSATED, sin reembolso, sin cupos que devolver
-        // y sin aviso de stock ni evento.
+        // Ya cancelada: mismo código de reembolso en cada reintento.
         if (!orden.codigoReembolso) {
           const compensada = orden.motivoCancelacion === MOTIVO_SAGA_COMPENSADA;
           Object.assign(orden, {
@@ -385,10 +387,11 @@ export class OrdenesV2Service {
         }
         return { status: 200, cuerpo: this.aCancelacion(orden, totalCentavos, true, ahora) };
       }
-      // PENDING: su saga todavía puede confirmarla (8.4); no se cancela a medias. El ESB reintenta.
-      if (orden.status !== OrdenStatus.CONFIRMED) {
+      // CHECKED_IN / CHECKED_OUT → no se pueden cancelar
+      if (orden.status === OrdenStatus.CHECKED_IN || orden.status === OrdenStatus.CHECKED_OUT) {
         throw new ProblemaV2Exception(409, 'INVALID_STATE_TRANSITION', `Una reserva en estado ${orden.status} no se puede cancelar.`);
       }
+      // PENDING y CONFIRMED: se cancelan. Para PENDING se libera la retención provisional y se cierra la saga.
 
       // LiberarCupos: devuelve exactamente lo que esta orden retuvo, una sola vez
 
@@ -496,8 +499,12 @@ export class OrdenesV2Service {
       throw new ProblemaV2Exception(403, 'FORBIDDEN', 'Esta reserva no es tuya.');
     }
     if (principal.rol === 'ADMIN' && !principal.superadmin) {
-      const propietario = (await this.catalogo.alojamientoPorId(orden.alojamientoId))?.propietarioId;
-      if (propietario !== principal.usuarioId) throw new ProblemaV2Exception(403, 'FORBIDDEN', 'La reserva es de un alojamiento que no administras.');
+      if (principal.alojamientoId != null) {
+        if (orden.alojamientoId !== principal.alojamientoId) throw new ProblemaV2Exception(403, 'FORBIDDEN', 'La reserva es de un alojamiento que no administras.');
+      } else {
+        const propietario = (await this.catalogo.alojamientoPorId(orden.alojamientoId))?.propietarioId;
+        if (propietario !== principal.usuarioId) throw new ProblemaV2Exception(403, 'FORBIDDEN', 'La reserva es de un alojamiento que no administras.');
+      }
     }
   }
 
@@ -656,8 +663,8 @@ export class OrdenesV2Service {
       codigoReembolso: orden.codigoReembolso,
       porcentajeReembolso: Number(orden.porcentajeReembolso ?? 0),
       montoReembolsado: centavosAMoney(reembolsado),
-      // Una orden compensada no tiene penalidad: Cozy nunca la confirmó ni la cobró
-      ...(orden.motivoCancelacion !== MOTIVO_SAGA_COMPENSADA && totalCentavos - reembolsado > 0 && { penalidad: centavosAMoney(totalCentavos - reembolsado) }),
+      // penalidad siempre presente (contrato); 0.00 cuando no aplica (saga compensada o reembolso total)
+      penalidad: orden.motivoCancelacion === MOTIVO_SAGA_COMPENSADA ? '0.00' : centavosAMoney(Math.max(0, totalCentavos - reembolsado)),
       cuposRestaurados: true,
       yaCancelada,
       timestamp: ahora.toISOString(),

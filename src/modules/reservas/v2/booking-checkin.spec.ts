@@ -312,6 +312,7 @@ describe('Paso 5: Cliente saliente de check-in hacia Booking', () => {
         ordenesServiceMock,
         eventosServiceMock,
         sagasServiceMock,
+        { verificaControlaLimpieza: async () => false, buscarLimpia: async () => null, marcarSucia: async () => {} } as any,
         bookingClient,
       );
 
@@ -396,6 +397,7 @@ describe('Paso 5: Cliente saliente de check-in hacia Booking', () => {
         { localizar: async () => ordenMock } as any,
         { emitir: async () => {} } as any,
         {} as any,
+        { verificaControlaLimpieza: async () => false, buscarLimpia: async () => null, marcarSucia: async () => {} } as any,
         bookingClient,
       );
 
