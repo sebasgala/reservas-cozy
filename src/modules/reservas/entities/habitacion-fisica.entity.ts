@@ -5,6 +5,9 @@ export enum EstadoLimpieza {
   LIMPIA = 'LIMPIA',
   SUCIA = 'SUCIA',
   EN_LIMPIEZA = 'EN_LIMPIEZA',
+  // Con huésped alojado (check-in → check-out). Solo la mueve el sistema, nunca el control manual de limpieza.
+  OCUPADA = 'OCUPADA',
+  MANTENIMIENTO = 'MANTENIMIENTO',
 }
 
 // Habitación física de un alojamiento. Una habitación del catálogo (tipo) puede tener varias físicas (p. ej. 101, 102).

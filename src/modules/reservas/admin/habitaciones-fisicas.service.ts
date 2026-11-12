@@ -61,6 +61,10 @@ export class HabitacionesFisicasService {
       const hf = await manager.findOneBy(HabitacionFisica, { id: habitacionId, alojamientoId, activa: true });
       if (!hf) throw new RecursoNoEncontradoException('La habitación física no existe', [{ name: 'id', reason: 'no existe' }]);
       if (hf.estadoLimpieza === dto.estadoLimpieza) return hf;
+      // OCUPADA la gobiernan el check-in y el check-out: el control interno no la toca ni la libera a mano
+      if (hf.estadoLimpieza === EstadoLimpieza.OCUPADA || dto.estadoLimpieza === EstadoLimpieza.OCUPADA) {
+        throw new ConflictoException('INVALID_STATE_TRANSITION', 'El estado OCUPADA lo gobiernan el check-in y el check-out de la reserva', [{ name: 'estadoLimpieza', reason: 'no editable manualmente' }]);
+      }
       const anterior = hf.estadoLimpieza;
       hf.estadoLimpieza = dto.estadoLimpieza;
       await manager.save(hf);
@@ -88,6 +92,19 @@ export class HabitacionesFisicasService {
       .andWhere('hf.activa = true')
       .orderBy('hf.numero', 'ASC')
       .getOne();
+  }
+
+  // Check-in: toma la primera habitación LIMPIA del tipo y la deja OCUPADA con su historial (misma transacción del check-in).
+  // Lanza 409 ROOM_NOT_AVAILABLE si no hay ninguna limpia (las SUCIA, EN_LIMPIEZA y en MANTENIMIENTO quedan bloqueadas).
+  async asignarYOcupar(manager: EntityManager, alojamientoId: number, tipoHabitacionId: string, reservaId: string, usuarioId: string | null): Promise<HabitacionFisica> {
+    const hf = await this.buscarLimpia(manager, alojamientoId, tipoHabitacionId);
+    if (!hf) {
+      throw new ConflictoException('ROOM_NOT_AVAILABLE', 'No hay habitaciones limpias disponibles para este tipo de habitación. Consulta con recepción.', [{ name: 'habitacionId', reason: 'sin habitación LIMPIA' }]);
+    }
+    hf.estadoLimpieza = EstadoLimpieza.OCUPADA;
+    await manager.save(hf);
+    await manager.insert(HistorialLimpieza, { habitacionFisicaId: hf.id, reservaId, usuarioId, estadoAnterior: EstadoLimpieza.LIMPIA, estadoNuevo: EstadoLimpieza.OCUPADA, motivo: 'check-in' });
+    return hf;
   }
 
   // Marca la habitación asignada como SUCIA (en la misma transacción del check-out)

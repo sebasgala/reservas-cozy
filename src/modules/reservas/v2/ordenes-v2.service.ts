@@ -417,7 +417,14 @@ export class OrdenesV2Service {
       return { encontrada, habitacion: await this.habitacionParaStock(encontrada.habitacionId) };
     });
     // Una respuesta repetida o una orden que ya estaba cancelada no deja nada pendiente
-    if (pendiente.cancelacion && !respuesta.repetida) await this.sagas.terminarCancelacion(pendiente.cancelacion);
+    if (pendiente.cancelacion && !respuesta.repetida) {
+      const liberados = await this.sagas.terminarCancelacion(pendiente.cancelacion);
+      if (!liberados) {
+        // La liberación real falló (lo termina el barrido): no se afirma lo que no ocurrió, ni en esta respuesta ni en su reintento
+        (respuesta.cuerpo as Record<string, unknown>).cuposRestaurados = false;
+        await this.dataSource.query(`UPDATE "reservas"."idempotencia_v2" SET "respuesta" = jsonb_set("respuesta"::jsonb, '{cuposRestaurados}', 'false')::json WHERE "clave" = $1`, [clave]);
+      }
+    }
     return respuesta;
   }
 
@@ -665,9 +672,9 @@ export class OrdenesV2Service {
       montoReembolsado: centavosAMoney(reembolsado),
       // penalidad siempre presente (contrato); 0.00 cuando no aplica (saga compensada o reembolso total)
       penalidad: orden.motivoCancelacion === MOTIVO_SAGA_COMPENSADA ? '0.00' : centavosAMoney(Math.max(0, totalCentavos - reembolsado)),
-      cuposRestaurados: true,
+      cuposRestaurados: true, // se corrige tras terminarCancelacion si la liberación real falló
       yaCancelada,
-      timestamp: ahora.toISOString(),
+      timestamp: isoGuayaquil(ahora),
       _links: { orden: { href: `/api/v2/alojamientos/orders/${orden.id}`, method: 'GET' } },
     };
   }

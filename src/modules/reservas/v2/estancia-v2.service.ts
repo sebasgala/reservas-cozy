@@ -9,6 +9,7 @@ import { CheckInV2Dto, CheckOutV2Dto, EarlyCheckinV2Dto } from './dto/estancia-v
 import { EventosService } from '../../comun/v2/eventos.service';
 import { OrdenesV2Service } from './ordenes-v2.service';
 import { peticionInvalida, ProblemaV2Exception, reglaDeNegocio } from '../../comun/v2/problemas-v2';
+import { ConflictoException } from '../../comun/problems/problem-details.exceptions';
 import { registrarV2 } from '../../comun/v2/registro-v2';
 import { isoGuayaquil } from '../../comun/v2/reloj';
 import { nochesDe } from '../../disponibilidad/disponibilidad.puerto';
@@ -68,10 +69,10 @@ export class EstanciaV2Service {
       const controlaLimpieza = await this.habitacionesFisicas.verificaControlaLimpieza(manager, orden.alojamientoId);
       let habitacionFisicaAsignada: string | null = null;
       if (controlaLimpieza) {
-        const hf = await this.habitacionesFisicas.buscarLimpia(manager, orden.alojamientoId, orden.habitacionId);
-        if (!hf) {
-          throw new ProblemaV2Exception(409, 'ROOM_NOT_AVAILABLE', 'No hay habitaciones limpias disponibles para este tipo de habitación. Consulta con recepción.');
-        }
+        const hf = await this.habitacionesFisicas.asignarYOcupar(manager, orden.alojamientoId, orden.habitacionId, orden.id, null).catch((e) => {
+          if (e instanceof ConflictoException) throw new ProblemaV2Exception(409, 'ROOM_NOT_AVAILABLE', e.message);
+          throw e;
+        });
         habitacionFisicaAsignada = hf.id;
       }
 

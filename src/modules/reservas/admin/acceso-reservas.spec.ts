@@ -87,14 +87,21 @@ function entorno() {
   // HAB_A2 tiene cupo en las fechas; HAB_A3 no (no aparece)
   const disponibilidad = { habitacionesDisponibles: async () => [{ id: HAB_A2, nombre: 'QA-Doble', tipo: 'doble' }] };
   const acceso = new AccesoReservasService(repo as never, catalogo as never);
+  // Habitaciones físicas: el alojamiento no controla limpieza salvo que la prueba lo pida
+  const fisicas = {
+    controla: false,
+    ocupadas: [] as string[],
+    verificaControlaLimpieza: async () => fisicas.controla,
+    asignarYOcupar: async () => (fisicas.ocupadas.push('HF-101'), { id: 'HF-101' }),
+  };
   const manager = {
     getRepository: () => ({ createQueryBuilder: () => ({ setLock: () => ({ where: (_s: string, { id }: { id: string }) => ({ getOne: async () => ordenes.get(id) }) }) }) }),
     save: async (o: Orden) => o,
     insert: async (_e: unknown, fila: Record<string, unknown>) => void auditoria.push(fila),
   };
   const dataSource = { transaction: async (f: (m: typeof manager) => Promise<unknown>) => f(manager), getRepository: () => ({ find: async () => auditoria }) };
-  const recepcion = new RecepcionService(dataSource as never, acceso, catalogo as never, disponibilidad as never);
-  return { acceso, recepcion, ordenes, auditoria };
+  const recepcion = new RecepcionService(dataSource as never, acceso, catalogo as never, disponibilidad as never, fisicas as never);
+  return { acceso, recepcion, ordenes, auditoria, fisicas };
 }
 
 describe('Bloque R: aislamiento de reservas por alojamiento (R3)', () => {
@@ -210,5 +217,28 @@ describe('Bloque R: auditoría local de recepción (R9)', () => {
     assert.equal(await estadoHttp(() => e.recepcion.cambiarHuespedes(ORDEN_A, { adultos: 2 }, yo)), 409);
     assert.equal(await estadoHttp(() => e.recepcion.reasignarHabitacion(ORDEN_A, { habitacionId: HAB_A2 }, yo)), 409);
     assert.equal(e.auditoria.length, 0);
+  });
+});
+
+describe('Bloque F1: reglas operativas de recepción', () => {
+  const yo = sesion(RolUsuario.RECEPCION, 1);
+
+  it('editar huéspedes o reasignar habitación solo en CONFIRMED: CHECKED_IN, CHECKED_OUT y CANCELLED → 409 INVALID_STATE_TRANSITION', async () => {
+    for (const estado of [OrdenStatus.CHECKED_IN, OrdenStatus.CHECKED_OUT, OrdenStatus.CANCELLED]) {
+      const e = entorno();
+      e.ordenes.get(ORDEN_A).status = estado;
+      assert.equal(await codigoDe(() => e.recepcion.cambiarHuespedes(ORDEN_A, { adultos: 3 }, yo)), 'INVALID_STATE_TRANSITION', `huéspedes en ${estado}`);
+      assert.equal(await codigoDe(() => e.recepcion.reasignarHabitacion(ORDEN_A, { habitacionId: HAB_A2 }, yo)), 'INVALID_STATE_TRANSITION', `reasignación en ${estado}`);
+      assert.equal(e.auditoria.length, 0);
+    }
+  });
+
+  it('el check-in con control de limpieza asigna la habitación física (OCUPADA) y la guarda en la orden', async () => {
+    const e = entorno();
+    e.fisicas.controla = true;
+    const r = await e.recepcion.aprobarCheckin(ORDEN_A, formulario(), yo, DESDE_14);
+    assert.equal(r.estado, OrdenStatus.CHECKED_IN);
+    assert.deepEqual(e.fisicas.ocupadas, ['HF-101']);
+    assert.equal(e.ordenes.get(ORDEN_A).habitacionFisicaId, 'HF-101');
   });
 });

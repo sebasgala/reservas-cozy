@@ -23,6 +23,7 @@ import { AccionRecepcion, AuditoriaRecepcion } from '../entities/auditoria-recep
 import { Orden, OrdenStatus } from '../entities/orden.entity';
 import { checkinCierraEn, checkinHabilitadoDesde, evaluarVentanaCheckin, mismoDocumento, normalizarDocumento, VentanaCheckin } from '../v2/checkin';
 import { AccesoReservasService } from './acceso-reservas.service';
+import { HabitacionesFisicasService } from './habitaciones-fisicas.service';
 import { CONEXION } from '../../../database/conexiones';
 
 // Bloque R (R6–R9): mostrador de recepción sobre las reservas de SU alojamiento (el del token).
@@ -42,6 +43,7 @@ export class RecepcionService {
     private readonly acceso: AccesoReservasService,
     private readonly catalogo: CatalogoPuerto,
     private readonly disponibilidad: DisponibilidadPuerto,
+    private readonly habitacionesFisicas: HabitacionesFisicasService,
   ) {}
 
   async contexto(usuario: UsuarioSesion): Promise<ContextoRecepcionDto> {
@@ -110,7 +112,7 @@ export class RecepcionService {
   }
 
   async aprobarCheckin(id: string, dto: AprobarCheckinDto, usuario: UsuarioSesion, ahora = new Date()): Promise<ReservaRecepcionDto> {
-    return this.operar(id, usuario, 'CHECKIN_APROBADO', dto.observaciones, (orden) => {
+    return this.operar(id, usuario, 'CHECKIN_APROBADO', dto.observaciones, async (orden, manager) => {
       if (orden.status !== OrdenStatus.CONFIRMED) {
         throw new ConflictoException('INVALID_STATE_TRANSITION', `No se puede aprobar el check-in de una reserva en estado ${orden.status}`, [{ name: 'id', reason: `estado ${orden.status}` }]);
       }
@@ -131,12 +133,17 @@ export class RecepcionService {
       orden.status = OrdenStatus.CHECKED_IN;
       orden.checkInEn = ahora;
       orden.habitacionAsignada ??= orden.habitacionNombre;
+      // Si el alojamiento controla la limpieza: toma una habitación física LIMPIA y la deja OCUPADA (misma transacción y auditoría)
+      if (!orden.habitacionFisicaId && (await this.habitacionesFisicas.verificaControlaLimpieza(manager, orden.alojamientoId))) {
+        orden.habitacionFisicaId = (await this.habitacionesFisicas.asignarYOcupar(manager, orden.alojamientoId, orden.habitacionId, orden.id, usuario.id)).id;
+      }
       return {
         antes,
         despues: {
           status: orden.status,
           checkInEn: ahora.toISOString(),
           habitacionAsignada: orden.habitacionAsignada,
+          habitacionFisicaId: orden.habitacionFisicaId ?? null,
           huespedesPresentes: dto.huespedesPresentes,
           codigoRecepcionista: dto.codigoRecepcionista,
           documentoPresentado: enmascarar(dto.documentoPresentado),
@@ -150,7 +157,7 @@ export class RecepcionService {
 
   async reasignarHabitacion(id: string, dto: ReasignarHabitacionDto, usuario: UsuarioSesion): Promise<ReservaRecepcionDto> {
     const encontrada = await this.acceso.orden(id, usuario);
-    this.exigirVigente(encontrada);
+    this.exigirConfirmada(encontrada);
     const candidata = (await this.habitacionesReasignables(id, usuario)).find((h) => h.id === dto.habitacionId);
     if (!candidata) {
       throw new ConflictoException('ROOM_NOT_AVAILABLE', 'La habitación elegida no tiene disponibilidad en las fechas de la reserva', [
@@ -159,7 +166,7 @@ export class RecepcionService {
     }
     const nueva = dto.etiqueta?.trim() ? `${candidata.nombre} - ${dto.etiqueta.trim()}` : candidata.nombre;
     return this.operar(id, usuario, 'REASIGNACION_HABITACION', dto.motivo, (orden) => {
-      this.exigirVigente(orden);
+      this.exigirConfirmada(orden);
       if (orden.habitacionAsignada === nueva) return null;
       const antes = { habitacionAsignada: orden.habitacionAsignada };
       orden.habitacionAsignada = nueva;
@@ -169,7 +176,7 @@ export class RecepcionService {
 
   async cambiarHuespedes(id: string, dto: CambiarHuespedesDto, usuario: UsuarioSesion): Promise<ReservaRecepcionDto> {
     return this.operar(id, usuario, 'CAMBIO_GUEST_COUNT', dto.motivo, (orden) => {
-      this.exigirVigente(orden);
+      this.exigirConfirmada(orden);
       const guests = orden.guests ?? {};
       const antes = { number_of_adults: guests.number_of_adults ?? null, children: guests.children ?? null };
       const despues = { number_of_adults: dto.adultos, children: dto.ninos ?? [] };
@@ -207,11 +214,11 @@ export class RecepcionService {
     });
   }
 
-  private async operar(id: string, usuario: UsuarioSesion, accion: AccionRecepcion, motivo: string | undefined, cambiar: (orden: Orden) => Cambio): Promise<ReservaRecepcionDto> {
+  private async operar(id: string, usuario: UsuarioSesion, accion: AccionRecepcion, motivo: string | undefined, cambiar: (orden: Orden, manager: EntityManager) => Cambio | Promise<Cambio>): Promise<ReservaRecepcionDto> {
     const encontrada = await this.acceso.orden(id, usuario);
     const orden = await this.dataSource.transaction(async (manager: EntityManager) => {
       const bloqueada = await manager.getRepository(Orden).createQueryBuilder('o').setLock('pessimistic_write').where('o.id = :id', { id: encontrada.id }).getOne();
-      const cambio = cambiar(bloqueada);
+      const cambio = await cambiar(bloqueada, manager);
       if (!cambio) return bloqueada;
       await manager.save(bloqueada);
       await manager.insert(AuditoriaRecepcion, {
@@ -251,6 +258,13 @@ export class RecepcionService {
       earlyAutorizado: orden.earlyCheckinAutorizado ?? false,
       earlyDesde: orden.earlyCheckinDesde ? new Date(orden.earlyCheckinDesde) : null,
     };
+  }
+
+  // Huéspedes y habitación física solo se editan mientras la orden está CONFIRMED (CHECKED_IN, CHECKED_OUT y CANCELLED → 409)
+  private exigirConfirmada(orden: Orden): void {
+    if (orden.status !== OrdenStatus.CONFIRMED) {
+      throw new ConflictoException('INVALID_STATE_TRANSITION', `La reserva está ${orden.status}: solo se editan huéspedes o habitación en CONFIRMED`, [{ name: 'id', reason: `estado ${orden.status}` }]);
+    }
   }
 
   private exigirVigente(orden: Orden): void {
