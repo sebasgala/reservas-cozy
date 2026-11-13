@@ -179,6 +179,7 @@ export class TitularRecepcionDto {
   @ApiProperty() nombre: string;
   @ApiProperty() email: string;
   @ApiPropertyOptional({ nullable: true }) tipoDocumento: string | null;
+  @ApiPropertyOptional({ nullable: true }) identificacion: string | null;
   @ApiProperty() documentoRegistrado: boolean;
 }
 

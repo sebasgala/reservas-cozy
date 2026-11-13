@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { CatalogoPuerto } from '../../catalogo/catalogo.puerto';
@@ -22,6 +22,7 @@ import {
 import { AccionRecepcion, AuditoriaRecepcion } from '../entities/auditoria-recepcion.entity';
 import { Orden, OrdenStatus } from '../entities/orden.entity';
 import { checkinCierraEn, checkinHabilitadoDesde, evaluarVentanaCheckin, mismoDocumento, normalizarDocumento, VentanaCheckin } from '../v2/checkin';
+import { BookingCheckinClient } from '../v2/booking-checkin.client';
 import { AccesoReservasService } from './acceso-reservas.service';
 import { HabitacionesFisicasService } from './habitaciones-fisicas.service';
 import { EventosService } from '../../comun/v2/eventos.service';
@@ -46,6 +47,7 @@ export class RecepcionService {
     private readonly disponibilidad: DisponibilidadPuerto,
     private readonly habitacionesFisicas: HabitacionesFisicasService,
     private readonly eventos: EventosService,
+    @Optional() private readonly bookingClient?: BookingCheckinClient,
   ) {}
 
   async contexto(usuario: UsuarioSesion): Promise<ContextoRecepcionDto> {
@@ -118,7 +120,8 @@ export class RecepcionService {
   }
 
   async aprobarCheckin(id: string, dto: AprobarCheckinDto, usuario: UsuarioSesion, ahora = new Date()): Promise<ReservaRecepcionDto> {
-    return this.operar(id, usuario, 'CHECKIN_APROBADO', dto.observaciones, async (orden, manager) => {
+    let ordenConfirmada: Orden | null = null;
+    const resultado = await this.operar(id, usuario, 'CHECKIN_APROBADO', dto.observaciones, async (orden, manager) => {
       if (orden.status !== OrdenStatus.CONFIRMED) {
         throw new ConflictoException('INVALID_STATE_TRANSITION', `No se puede aprobar el check-in de una reserva en estado ${orden.status}`, [{ name: 'id', reason: `estado ${orden.status}` }]);
       }
@@ -145,6 +148,28 @@ export class RecepcionService {
       if (!orden.habitacionFisicaId && (await this.habitacionesFisicas.verificaControlaLimpieza(manager, orden.alojamientoId))) {
         orden.habitacionFisicaId = (await this.habitacionesFisicas.asignarYOcupar(manager, orden.alojamientoId, orden.habitacionId, orden.id, usuario.id)).id;
       }
+      if (typeof this.eventos?.emitir === 'function') {
+        await this.eventos.emitir(
+          manager,
+          [
+            {
+              tipo: 'alojamiento.checkin.completado',
+              sujeto: `orders/${orden.id}`,
+              alojamientoId: orden.alojamientoId,
+              datos: {
+                orderId: orden.id,
+                external_order_id: `ORD-HTL-${orden.locator}`,
+                estado: 'CHECKED_IN',
+                alojamientoId: orden.alojamientoCodigo,
+                tipoHabitacionCodigo: orden.habitacionCodigo,
+                checkInHora: isoGuayaquil(ahora),
+              },
+            },
+          ],
+          null,
+        );
+      }
+      ordenConfirmada = orden;
       return {
         antes,
         despues: {
@@ -161,6 +186,37 @@ export class RecepcionService {
         },
       };
     });
+
+    if (ordenConfirmada) {
+      await this.notificarCheckinABooking(ordenConfirmada, dto, usuario, ahora);
+    }
+
+    return resultado;
+  }
+
+  private async notificarCheckinABooking(orden: Orden, dto: AprobarCheckinDto, usuario: UsuarioSesion, ahora: Date): Promise<void> {
+    if (!this.bookingClient) return;
+    try {
+      const payloadBooking = this.bookingClient.construirPayload({
+        external_order_id: `ORD-HTL-${orden.locator}`,
+        client_id: orden.clienteId ?? orden.id,
+        huespedes_reales: dto.huespedesPresentes,
+        admin_id: usuario.id ?? 'admin-recepcion',
+        fecha_checkin: ahora,
+        observaciones: dto.observaciones?.trim() || null,
+      });
+      const resBooking = await this.bookingClient.notificarCheckin(payloadBooking, null);
+      if (!resBooking.omitido) {
+        await this.bookingClient.guardarResultado(orden.id, payloadBooking, resBooking, null);
+      }
+    } catch (err) {
+      await this.bookingClient.guardarResultado(
+        orden.id,
+        null,
+        { exito: false, error: (err as Error).message },
+        null,
+      );
+    }
   }
 
   async reasignarHabitacion(id: string, dto: ReasignarHabitacionDto, usuario: UsuarioSesion): Promise<ReservaRecepcionDto> {
@@ -348,6 +404,7 @@ export class RecepcionService {
         nombre: titular?.nombreCompleto ?? `${o.customerFirstName ?? ''} ${o.customerLastName ?? ''}`.trim(),
         email: titular?.email ?? o.customerEmail,
         tipoDocumento: titular?.tipoDocumento ?? null,
+        identificacion: titular?.identificacion ?? null,
         documentoRegistrado: Boolean(titular?.identificacion),
       },
       huespedes: {
