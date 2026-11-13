@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@ne
 import { Request } from 'express';
 import {
   AprobarCheckinDto,
+  ArchivarReservaDto,
   AuditoriaRecepcionDto,
   AutorizarEarlyCheckinDto,
   CambiarHuespedesDto,
@@ -10,6 +11,7 @@ import {
   ContextoRecepcionDto,
   FiltroRecepcionQueryDto,
   HabitacionReasignableDto,
+  MarcarHabitacionListaDto,
   ReasignarHabitacionDto,
   ReservaRecepcionDto,
   ReservasRecepcionPaginadasDto,
@@ -148,5 +150,31 @@ export class RecepcionController {
   @ApiResponse(R409)
   autorizarEarlyCheckin(@Req() req: Request, @Param('id', idUuid('id')) id: string, @Body() dto: AutorizarEarlyCheckinDto, @UsuarioActual() usuario: Usuario) {
     return this.recepcion.autorizarEarlyCheckin(id, dto, usuario, ahoraDe(this.reloj, req));
+  }
+
+  @Post('reservas/:id/habitacion-limpia')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Marcar la habitación como limpia tras el check-out (POR_LIMPIAR → LIMPIA_LISTA, Fase 2)' })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiResponse({ status: 200, type: ReservaRecepcionDto })
+  @ApiResponse(R401)
+  @ApiResponse(R403)
+  @ApiResponse(R404)
+  @ApiResponse(R409)
+  marcarHabitacionLista(@Req() req: Request, @Param('id', idUuid('id')) id: string, @Body() dto: MarcarHabitacionListaDto, @UsuarioActual() usuario: Usuario) {
+    return this.recepcion.marcarHabitacionLista(id, dto, usuario, ahoraDe(this.reloj, req));
+  }
+
+  @Post('reservas/:id/archivar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Archivar la reserva y sacarla del tablero (solo CANCELLED o LIMPIA_LISTA, Fase 2)' })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiResponse({ status: 200, type: ReservaRecepcionDto })
+  @ApiResponse(R401)
+  @ApiResponse(R403)
+  @ApiResponse(R404)
+  @ApiResponse(R409)
+  archivarReserva(@Param('id', idUuid('id')) id: string, @Body() dto: ArchivarReservaDto, @UsuarioActual() usuario: Usuario) {
+    return this.recepcion.archivarReservaRecepcion(id, usuario, dto.motivo);
   }
 }

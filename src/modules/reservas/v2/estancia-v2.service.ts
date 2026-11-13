@@ -47,7 +47,9 @@ export class EstanciaV2Service {
       if (orden.status !== OrdenStatus.CONFIRMED) {
         throw new ProblemaV2Exception(409, 'INVALID_STATE_TRANSITION', `No se puede hacer check-in de una reserva en estado ${orden.status}.`);
       }
-      if (!mismoDocumento(dto.titularIdentificacion, (orden.huespedTitular as { identificacion?: string } | null)?.identificacion)) {
+      const titular = orden.huespedTitular as Record<string, any> | null;
+      const docRegistrado = titular?.identificacion ?? titular?.document_id ?? titular?.cedula ?? titular?.numeroIdentificacion ?? null;
+      if (!mismoDocumento(dto.titularIdentificacion, docRegistrado)) {
         throw reglaDeNegocio('INVALID_DOCUMENT', 'titularIdentificacion no corresponde al titular de la reserva.', [
           { name: 'titularIdentificacion', reason: 'no coincide con el titular de la reserva' },
         ]);
@@ -184,14 +186,17 @@ export class EstanciaV2Service {
         throw peticionInvalida([{ name: 'consumosMinibar', reason: 'el total de los consumos supera el máximo que admite un importe' }]);
       }
       const liberada = orden.habitacionAsignada ?? '';
-      orden.status = OrdenStatus.CHECKED_OUT;
+      // Fase 2: el check-out NO finaliza la reserva; pasa a POR_LIMPIAR y sigue visible en recepción (archivada = false).
+      // La habitación física queda SUCIA/bloqueada hasta que recepción la marque limpia (marcarHabitacionLista).
+      orden.status = OrdenStatus.POR_LIMPIAR;
+      orden.archivadaRecepcion = false;
       orden.checkOutEn = ahora;
       orden.consumos = consumos.map((c) => ({ item: c.item, cantidad: c.cantidad ?? 1, precio: c.precio }));
       orden.consumosAdicionales = totalCentavos / 100;
       orden.metodoPagoConsumos = consumos.length > 0 ? (dto.metodoPagoConsumos ?? 'CARGO_A_RESERVA') : null;
       orden.claveAccesoDigital = null; // revocada
       await manager.save(orden);
-      // Bloque R: si había habitación física asignada, marcarla como SUCIA en la misma transacción
+      // Bloque R: si había habitación física asignada, marcarla como SUCIA en la misma transacción (deja su historial)
       if (orden.habitacionFisicaId) {
         await this.habitacionesFisicas.marcarSucia(manager, orden.habitacionFisicaId, orden.id);
       }
@@ -211,8 +216,12 @@ export class EstanciaV2Service {
               estado: 'CHECKED_OUT',
               alojamientoId: orden.alojamientoCodigo,
               tipoHabitacionCodigo: orden.habitacionCodigo,
+              checkin: orden.checkin,
+              checkout: orden.checkout,
               checkOutHora: isoGuayaquil(ahora),
               consumosAdicionales: centavosAMoney(totalCentavos),
+              // El inventario FÍSICO no se libera aquí: la habitación queda SUCIA hasta marcarse limpia (habitacion.limpia.lista)
+              inventarioFisicoLiberado: false,
             },
           },
         ],

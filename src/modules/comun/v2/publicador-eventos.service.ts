@@ -30,7 +30,22 @@ export const SQL_CANDADO = `SELECT "ultimo"::bigint AS "ultimo" FROM "comun"."fe
 
 const COLUMNAS = `"id", "eventoId", "tipo", "sujeto", "alojamientoId", "correlacionId", "datos", "creadoEn", "registradoEn"`;
 
+// Los cinco tipos del contrato B2B: son los únicos que entran a comun.feed_eventos (GET /alojamientos/eventos).
+// Un tipo fuera de esta lista (p. ej. habitacion.limpia.lista) es INTERNO: viaja por RabbitMQ entre microservicios,
+// no se numera ni se copia al feed. El publicador lo marca procesado con el centinela sequence = 0.
+export const TIPOS_CONTRATO = [
+  'alojamiento.reserva.confirmada',
+  'alojamiento.reserva.cancelada',
+  'alojamiento.checkin.completado',
+  'alojamiento.checkout.completado',
+  'alojamiento.stock.actualizado',
+] as const;
+const LISTA_TIPOS_CONTRATO = TIPOS_CONTRATO.map((t) => `'${t}'`).join(', ');
+export const SEQUENCE_INTERNO = 0;
+
 // $1 = cuántos como máximo, $2 = el `ultimo` leído con el candado
+// `numerados` solo numera y publica los eventos del contrato; `internos` marca el resto con el centinela y los deja
+// fuera del feed y del contador. El orden por (registradoEn, origen, id) se mantiene dentro de cada grupo.
 export const SQL_PUBLICAR = `
 WITH pendientes AS (
   SELECT * FROM (
@@ -43,7 +58,11 @@ WITH pendientes AS (
   LIMIT $1
 ),
 numerados AS (
-  SELECT p.*, $2::bigint + row_number() OVER (ORDER BY p."registradoEn", p."origen", p."id") AS "nuevo" FROM pendientes p
+  SELECT p.*, $2::bigint + row_number() OVER (ORDER BY p."registradoEn", p."origen", p."id") AS "nuevo"
+  FROM pendientes p WHERE p."tipo" IN (${LISTA_TIPOS_CONTRATO})
+),
+internos AS (
+  SELECT p.* FROM pendientes p WHERE p."tipo" NOT IN (${LISTA_TIPOS_CONTRATO})
 ),
 al_feed AS (
   INSERT INTO "comun"."feed_eventos" ("sequence", "id", "tipo", "sujeto", "alojamientoId", "correlacionId", "datos", "creadoEn")
@@ -54,9 +73,11 @@ m_usuarios AS (UPDATE "usuarios"."outbox_usuarios" o SET "sequence" = n."nuevo" 
 m_catalogo AS (UPDATE "catalogo"."outbox_catalogo" o SET "sequence" = n."nuevo" FROM numerados n WHERE n."origen" = 'catalogo' AND o."id" = n."id" RETURNING 1),
 m_disponibilidad AS (UPDATE "disponibilidad"."outbox_disponibilidad" o SET "sequence" = n."nuevo" FROM numerados n WHERE n."origen" = 'disponibilidad' AND o."id" = n."id" RETURNING 1),
 m_reservas AS (UPDATE "reservas"."outbox_reservas" o SET "sequence" = n."nuevo" FROM numerados n WHERE n."origen" = 'reservas' AND o."id" = n."id" RETURNING 1),
+mi_reservas AS (UPDATE "reservas"."outbox_reservas" o SET "sequence" = ${SEQUENCE_INTERNO} FROM internos n WHERE n."origen" = 'reservas' AND o."id" = n."id" RETURNING 1),
 contador AS (UPDATE "comun"."feed_publicador" SET "ultimo" = "ultimo" + (SELECT count(*) FROM numerados) WHERE "id" = 1 RETURNING "ultimo")
 SELECT (SELECT count(*) FROM al_feed)::int AS "publicados",
        ((SELECT count(*) FROM m_usuarios) + (SELECT count(*) FROM m_catalogo) + (SELECT count(*) FROM m_disponibilidad) + (SELECT count(*) FROM m_reservas))::int AS "marcados",
+       (SELECT count(*) FROM mi_reservas)::int AS "internos",
        (SELECT "ultimo" FROM contador)::bigint AS "ultimo"
 `;
 
@@ -102,7 +123,8 @@ export class PublicadorEventosService implements OnApplicationBootstrap, OnModul
     return this.enCurso;
   }
 
-  // Publica a lo sumo `lote` eventos y devuelve cuántos. 0 si no había nada o si otra instancia tiene el candado.
+  // Publica a lo sumo `lote` eventos y devuelve cuántos se procesaron (contrato + internos). 0 si no había nada o si
+  // otra instancia tiene el candado. Los eventos internos se marcan procesados pero NO entran al feed ni al contador.
   async publicarLote(lote = LOTE_PUBLICACION): Promise<number> {
     return this.dataSource.transaction(async (manager) => {
       const [candado] = await manager.query(SQL_CANDADO);
@@ -111,7 +133,7 @@ export class PublicadorEventosService implements OnApplicationBootstrap, OnModul
       if (r.marcados !== r.publicados || Number(r.ultimo) !== Number(candado.ultimo) + r.publicados) {
         throw new Error(`publicación inconsistente: ${r.publicados} al feed, ${r.marcados} marcados, último ${r.ultimo} (antes ${candado.ultimo})`);
       }
-      return r.publicados;
+      return r.publicados + r.internos;
     });
   }
 

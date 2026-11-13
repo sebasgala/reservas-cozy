@@ -24,6 +24,7 @@ import { Orden, OrdenStatus } from '../entities/orden.entity';
 import { checkinCierraEn, checkinHabilitadoDesde, evaluarVentanaCheckin, mismoDocumento, normalizarDocumento, VentanaCheckin } from '../v2/checkin';
 import { AccesoReservasService } from './acceso-reservas.service';
 import { HabitacionesFisicasService } from './habitaciones-fisicas.service';
+import { EventosService } from '../../comun/v2/eventos.service';
 import { CONEXION } from '../../../database/conexiones';
 
 // Bloque R (R6–R9): mostrador de recepción sobre las reservas de SU alojamiento (el del token).
@@ -44,6 +45,7 @@ export class RecepcionService {
     private readonly catalogo: CatalogoPuerto,
     private readonly disponibilidad: DisponibilidadPuerto,
     private readonly habitacionesFisicas: HabitacionesFisicasService,
+    private readonly eventos: EventosService,
   ) {}
 
   async contexto(usuario: UsuarioSesion): Promise<ContextoRecepcionDto> {
@@ -66,6 +68,10 @@ export class RecepcionService {
       .createQueryBuilder('o')
       .skip((pagina - 1) * limite)
       .take(limite);
+    // Tablero activo: solo reservas sin archivar (CONFIRMED, CHECKED_IN, POR_LIMPIAR, CANCELLED…). Las LIMPIA_LISTA
+    // y las archivadas a mano salen del tablero (salvo que f.archivadaRecepcion pida true).
+    const archivada = f.archivadaRecepcion ?? false;
+    consulta.andWhere('o.archivadaRecepcion = :archivada', { archivada });
     if (f.pendientesCheckin) {
       consulta
         .andWhere('o.status = :pendiente', { pendiente: OrdenStatus.CONFIRMED })
@@ -125,9 +131,11 @@ export class RecepcionService {
       if (ventana.estado === 'VENCIDA') {
         throw new ConflictoException('INVALID_STATE_TRANSITION', `La estancia terminó el ${orden.checkout}`, [{ name: 'id', reason: 'ventana de check-in cerrada' }]);
       }
-      const registrado = (orden.huespedTitular as { identificacion?: string } | null)?.identificacion ?? null;
+      const titular = orden.huespedTitular as Record<string, any> | null;
+      const docRegistrado = titular?.identificacion ?? titular?.document_id ?? titular?.cedula ?? titular?.numeroIdentificacion ?? null;
+      const registrado = docRegistrado != null ? String(docRegistrado).trim() : null;
       if (registrado && !mismoDocumento(dto.documentoPresentado, registrado)) {
-        throw new ConsultaInvalidaException([{ name: 'documentoPresentado', reason: 'no coincide con el documento del titular' }], 'El documento presentado no coincide con el titular de la reserva');
+        throw new ConsultaInvalidaException([{ name: 'documentoPresentado', reason: 'no coincide con el documento del titular de la reserva' }], 'El documento presentado no coincide con el titular de la reserva');
       }
       const antes = { status: orden.status, checkInEn: orden.checkInEn, habitacionAsignada: orden.habitacionAsignada };
       orden.status = OrdenStatus.CHECKED_IN;
@@ -211,6 +219,52 @@ export class RecepcionService {
       orden.earlyCheckinDesde = desde;
       orden.earlyCheckinMotivo = dto.motivo?.trim() || null;
       return { antes, despues: { autorizado: true, desde: desde.toISOString() } };
+    });
+  }
+
+  // Fase 2: la limpieza terminó. Solo desde POR_LIMPIAR. La reserva pasa a LIMPIA_LISTA y se archiva (sale del tablero),
+  // la habitación física vuelve a LIMPIA y se emite el evento interno habitacion.limpia.lista (disponibilidad/ reabre
+  // el inventario físico). Todo en la misma transacción y con su fila de auditoría.
+  async marcarHabitacionLista(id: string, dto: { habitacionFisicaId?: string; notas?: string }, usuario: UsuarioSesion, ahora = new Date()): Promise<ReservaRecepcionDto> {
+    return this.operar(id, usuario, 'HABITACION_LIMPIA_LISTA', dto.notas, async (orden, manager) => {
+      if (orden.status !== OrdenStatus.POR_LIMPIAR) {
+        throw new ConflictoException('INVALID_STATE_TRANSITION', `La habitación solo se marca limpia desde POR_LIMPIAR (la reserva está ${orden.status})`, [{ name: 'id', reason: `estado ${orden.status}` }]);
+      }
+      // Un alojamiento sin habitaciones físicas registradas no controla limpieza: el check-in no asigna ninguna y la orden
+      // queda sin habitacionFisicaId. No es un error: se cierra igual el ciclo (LIMPIA_LISTA + evento de stock) sin tocar inventario físico.
+      const habitacionFisicaId = dto.habitacionFisicaId ?? orden.habitacionFisicaId ?? null;
+      const antes = { status: orden.status, archivadaRecepcion: orden.archivadaRecepcion };
+      orden.status = OrdenStatus.LIMPIA_LISTA;
+      orden.archivadaRecepcion = true;
+      // Libera el bloqueo físico (si lo hay): SUCIA/OCUPADA → LIMPIA (deja su historial de limpieza)
+      if (habitacionFisicaId) {
+        await this.habitacionesFisicas.marcarLista(manager, habitacionFisicaId, orden.id, usuario.id, dto.notas);
+      }
+      // Evento INTERNO (no va al feed del contrato): disponibilidad/ reabre el inventario físico al recibirlo
+      await this.eventos.emitirHabitacionLimpiaLista(manager, `orders/${orden.id}`, orden.alojamientoId, {
+        reservaId: orden.id,
+        alojamientoId: orden.alojamientoCodigo,
+        tipoHabitacionCodigo: orden.habitacionCodigo,
+        habitacionFisicaId,
+        checkin: orden.checkin,
+        checkout: orden.checkout,
+        ...(usuario.id && { usuarioId: usuario.id }),
+        timestamp: isoGuayaquil(ahora),
+      });
+      return { antes, despues: { status: orden.status, archivadaRecepcion: true, habitacionFisicaId } };
+    });
+  }
+
+  // Fase 2: archiva una reserva para sacarla del tablero activo. Solo desde CANCELLED o LIMPIA_LISTA.
+  async archivarReservaRecepcion(id: string, usuario: UsuarioSesion, motivo?: string): Promise<ReservaRecepcionDto> {
+    return this.operar(id, usuario, 'RESERVA_ARCHIVADA', motivo, (orden) => {
+      if (orden.status !== OrdenStatus.CANCELLED && orden.status !== OrdenStatus.LIMPIA_LISTA) {
+        throw new ConflictoException('INVALID_STATE_TRANSITION', `Solo se archivan reservas CANCELLED o LIMPIA_LISTA (la reserva está ${orden.status})`, [{ name: 'id', reason: `estado ${orden.status}` }]);
+      }
+      if (orden.archivadaRecepcion) return null;
+      const antes = { archivadaRecepcion: orden.archivadaRecepcion };
+      orden.archivadaRecepcion = true;
+      return { antes, despues: { archivadaRecepcion: true } };
     });
   }
 
@@ -305,6 +359,7 @@ export class RecepcionService {
       checkinHabilitadoDesde: checkinHabilitadoDesde(ventana).toISOString(),
       checkinCierraEn: checkinCierraEn(o.checkout).toISOString(),
       checkInEn: o.checkInEn ? new Date(o.checkInEn).toISOString() : null,
+      archivadaRecepcion: o.archivadaRecepcion ?? false,
     };
   }
 }

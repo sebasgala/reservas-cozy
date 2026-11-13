@@ -31,7 +31,7 @@ export class HabitacionFisica {
   @Column({ type: 'varchar', length: 20 })
   numero: string;
 
-  @Column({ type: 'enum', enum: EstadoLimpieza, default: EstadoLimpieza.LIMPIA })
+  @Column({ name: 'estado_limpieza', type: 'enum', enum: EstadoLimpieza, default: EstadoLimpieza.LIMPIA })
   estadoLimpieza: EstadoLimpieza;
 
   @Column({ type: 'boolean', default: true })

@@ -100,7 +100,8 @@ function entorno() {
     insert: async (_e: unknown, fila: Record<string, unknown>) => void auditoria.push(fila),
   };
   const dataSource = { transaction: async (f: (m: typeof manager) => Promise<unknown>) => f(manager), getRepository: () => ({ find: async () => auditoria }) };
-  const recepcion = new RecepcionService(dataSource as never, acceso, catalogo as never, disponibilidad as never, fisicas as never);
+  const eventos = { emitirHabitacionLimpiaLista: async () => {} };
+  const recepcion = new RecepcionService(dataSource as never, acceso, catalogo as never, disponibilidad as never, fisicas as never, eventos as never);
   return { acceso, recepcion, ordenes, auditoria, fisicas };
 }
 

@@ -42,12 +42,21 @@ export function evaluarVentanaCheckin(v: VentanaCheckin, ahora: Date): Resultado
   return { estado: 'ABIERTA' };
 }
 
-// Mayúsculas y sin espacios: el huésped puede escribir el pasaporte en minúsculas
-export const normalizarDocumento = (documento: string | undefined | null): string => (documento ?? '').trim().toUpperCase();
+// Mayúsculas y sin espacios: el huésped puede escribir el pasaporte en minúsculas, o venir como número desde la BD
+export const normalizarDocumento = (documento: unknown): string => {
+  if (documento == null) return '';
+  return String(documento).trim().toUpperCase();
+};
 
-export const mismoDocumento = (declarado: string, registrado: string | undefined | null): boolean => {
+export const mismoDocumento = (declarado: unknown, registrado: unknown): boolean => {
   const esperado = normalizarDocumento(registrado);
-  return esperado.length > 0 && normalizarDocumento(declarado) === esperado;
+  const recibido = normalizarDocumento(declarado);
+  if (!esperado || !recibido) return false;
+  if (recibido === esperado) return true;
+  // Comparación tolerante eliminando caracteres no alfanuméricos (guiones, espacios, puntos)
+  const cleanEsperado = esperado.replace(/[^A-Z0-9]/g, '');
+  const cleanRecibido = recibido.replace(/[^A-Z0-9]/g, '');
+  return cleanEsperado.length > 0 && cleanRecibido === cleanEsperado;
 };
 
 // "Nombre I.": lo único del autor de una reseña que sale en público

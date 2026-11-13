@@ -13,7 +13,9 @@ import {
 import { ColumnNumericTransformer } from '../../../common/transformers/column-numeric.transformer';
 import { OrdenPreview } from './orden-preview.entity';
 
-// Mismos valores que el enum status de OrderDetail en el contrato.
+// Los cinco primeros valores son los del enum status de OrderDetail en el contrato. POR_LIMPIAR y LIMPIA_LISTA son
+// estados INTERNOS del flujo post-check-out (Fase 2): nunca salen al contrato. Hacia afuera (OrdenesV2Service.aDetalle)
+// ambos se reportan como CHECKED_OUT, de modo que el enum del contrato B2B queda intacto.
 export enum OrdenStatus {
   PENDING = 'PENDING',
   CONFIRMED = 'CONFIRMED',
@@ -21,6 +23,15 @@ export enum OrdenStatus {
   // Solo las pone la v2 (check-in y check-out digitales)
   CHECKED_IN = 'CHECKED_IN',
   CHECKED_OUT = 'CHECKED_OUT',
+  // Internos (Fase 2): tras el check-out la habitación debe limpiarse antes de reutilizarse.
+  POR_LIMPIAR = 'POR_LIMPIAR',
+  LIMPIA_LISTA = 'LIMPIA_LISTA',
+}
+
+// Estados externos del contrato: los internos (POR_LIMPIAR, LIMPIA_LISTA) se mapean a CHECKED_OUT hacia afuera.
+export const ESTADOS_INTERNOS_POST_CHECKOUT: ReadonlySet<OrdenStatus> = new Set([OrdenStatus.POR_LIMPIAR, OrdenStatus.LIMPIA_LISTA]);
+export function estadoContrato(status: OrdenStatus): string {
+  return ESTADOS_INTERNOS_POST_CHECKOUT.has(status) ? OrdenStatus.CHECKED_OUT : status;
 }
 
 // Nombres de restricciones que el código necesita reconocer cuando PostgreSQL las reporta.
@@ -35,7 +46,7 @@ export const UQ_ORDENES_PREVIEW = 'UQ_ordenes_previewId';
 @Check('CHK_ordenes_reembolso', '("porcentajeReembolso" IS NULL OR "porcentajeReembolso" BETWEEN 0 AND 100) AND ("montoReembolsado" IS NULL OR "montoReembolsado" >= 0)')
 @Check(
   'CHK_ordenes_estancia',
-  `("status"::text NOT IN ('CHECKED_IN', 'CHECKED_OUT') OR "checkInEn" IS NOT NULL) AND ("status"::text <> 'CHECKED_OUT' OR "checkOutEn" IS NOT NULL) AND ("consumosAdicionales" IS NULL OR "consumosAdicionales" >= 0)`,
+  `("status"::text NOT IN ('CHECKED_IN', 'CHECKED_OUT', 'POR_LIMPIAR', 'LIMPIA_LISTA') OR "checkInEn" IS NOT NULL) AND ("status"::text NOT IN ('CHECKED_OUT', 'POR_LIMPIAR', 'LIMPIA_LISTA') OR "checkOutEn" IS NOT NULL) AND ("consumosAdicionales" IS NULL OR "consumosAdicionales" >= 0)`,
 )
 @Unique('UQ_ordenes_codigoReembolso', ['codigoReembolso'])
 export class Orden {
@@ -246,4 +257,11 @@ export class Orden {
   // Paquete (combo) con el que se vendió: { paqueteId, descuentoPorcentaje, descuentoMonto }
   @Column({ type: 'jsonb', nullable: true })
   paquete: Record<string, any> | null;
+
+  // ───────────── Recepción (Fase 2) ─────────────
+  // Saca la reserva del tablero activo de recepción. Una cancelación la deja visible (false); el archivado manual, o
+  // marcar la habitación como limpia tras el check-out (LIMPIA_LISTA), la archivan (true).
+  @Index('IX_ordenes_archivadaRecepcion')
+  @Column({ name: 'archivada_recepcion', type: 'boolean', default: false })
+  archivadaRecepcion: boolean;
 }

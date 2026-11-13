@@ -4,7 +4,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { calcularNoches, huellaDePeticion } from '../../comun/alojamientos-consulta.utils';
 import { AlojamientoCatalogo, CatalogoPuerto, HabitacionCatalogo, RefHabitacionStock } from '../../catalogo/catalogo.puerto';
-import { Orden, OrdenStatus } from '../entities/orden.entity';
+import { estadoContrato, Orden, OrdenStatus } from '../entities/orden.entity';
 import { PrincipalV2 } from '../../usuarios/v2/autenticacion-v2';
 import { aCentavos, centavosAMoney, metadataPagina, moneyACentavos } from '../../comun/v2/dinero';
 import { DesgloseV2, DisponibilidadPuerto, evaluarRestricciones, nochesDe, Ocupacion, PLAN_ESTANDAR, PoliticaCancelacion, ResultadoReserva } from '../../disponibilidad/disponibilidad.puerto';
@@ -39,6 +39,12 @@ import { CONEXION } from '../../../database/conexiones';
 // Del catálogo solo se lee por su puerto; lo que la orden muestra se copia en ella al reservar (fase 8.0).
 // Fase 8.2: esas lecturas van en la fase `preparar` de la idempotencia, antes de abrir la transacción; dentro solo se
 // decide con lo leído, en el mismo punto y con el mismo error que antes.
+
+// Fase 1: todas las órdenes v2 son de tarifa NO reembolsable. Ninguna cancelación genera devolución ni reembolso parcial.
+export const POLITICA_NO_REEMBOLSABLE = {
+  esReembolsable: false,
+  descripcion: 'Tarifa no reembolsable. Las cancelaciones no generan devoluciones ni reembolsos parciales.',
+} as const;
 
 const ALFABETO_LOCATOR = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const LARGO_LOCATOR = 8;
@@ -248,7 +254,7 @@ export class OrdenesV2Service {
                   huespedesAdicionales: dto.huespedesAdicionales ? dto.huespedesAdicionales.map((h) => ({ ...h })) : null,
                   peticionesEspeciales: dto.peticionesEspeciales ?? null,
                   desgloseFiscal: this.aDesgloseFiscal(desglosePrecio),
-                  politicaCancelacion: plan.politicaCancelacion,
+                  politicaCancelacion: POLITICA_NO_REEMBOLSABLE,
                   paquete: dto.paquete ? { ...dto.paquete } : null,
                 }),
               );
@@ -356,7 +362,7 @@ export class OrdenesV2Service {
         guests: { adults: Number(o.guests?.number_of_adults ?? 0), children: Array.isArray(o.guests?.children) ? o.guests.children.length : 0 },
         total_price: centavosAMoney(aCentavos(Number(o.totalPrice))),
         currency: o.currency,
-        status: o.status,
+        status: estadoContrato(o.status),
         created_at: new Date(o.createdAt).toISOString(),
       })),
     };
@@ -379,23 +385,25 @@ export class OrdenesV2Service {
         // Ya cancelada: mismo código de reembolso en cada reintento.
         if (!orden.codigoReembolso) {
           const compensada = orden.motivoCancelacion === MOTIVO_SAGA_COMPENSADA;
+          // Fase 1: salvo la compensación de saga, una cancelación previa sin código queda como NO_REFUND (0 %).
           Object.assign(orden, {
             codigoReembolso: await this.codigoReembolso(manager),
-            ...(compensada ? {} : { refundStatus: 'REFUNDED', porcentajeReembolso: 100, montoReembolsado: totalCentavos / 100 }),
+            ...(compensada ? {} : { refundStatus: 'NO_REFUND', porcentajeReembolso: 0, montoReembolsado: 0 }),
           });
           await manager.save(orden);
         }
         return { status: 200, cuerpo: this.aCancelacion(orden, totalCentavos, true, ahora) };
       }
-      // CHECKED_IN / CHECKED_OUT → no se pueden cancelar
-      if (orden.status === OrdenStatus.CHECKED_IN || orden.status === OrdenStatus.CHECKED_OUT) {
+      // Solo PENDING y CONFIRMED se cancelan. CHECKED_IN, CHECKED_OUT y los estados de limpieza (POR_LIMPIAR,
+      // LIMPIA_LISTA) ya consumieron la estancia: no admiten cancelación.
+      if (orden.status !== OrdenStatus.PENDING && orden.status !== OrdenStatus.CONFIRMED) {
         throw new ProblemaV2Exception(409, 'INVALID_STATE_TRANSITION', `Una reserva en estado ${orden.status} no se puede cancelar.`);
       }
       // PENDING y CONFIRMED: se cancelan. Para PENDING se libera la retención provisional y se cierra la saga.
 
       // LiberarCupos: devuelve exactamente lo que esta orden retuvo, una sola vez
 
-      const { porcentaje, estado } = this.reembolso(orden, solicitadoPor, ahora);
+      const { porcentaje, estado } = this.reembolso(solicitadoPor);
       Object.assign(orden, {
         status: OrdenStatus.CANCELLED,
         canceladaEn: ahora,
@@ -525,16 +533,12 @@ export class OrdenesV2Service {
     return pedido;
   }
 
-  // Reembolso (§4): la compensación de la Saga devuelve el 100 % siempre; el hotel o un administrador, también;
-  // un cliente, según la política del plan (dentro de la ventana 100 %, fuera de ella se aplica la penalidad).
-  private reembolso(orden: Orden, solicitadoPor: string, ahora: Date): { porcentaje: number; estado: string } {
+  // Reembolso (Fase 1): tarifa NO reembolsable. Cualquier cancelación —de un cliente, el hotel, un administrador o el
+  // webhook/consumidor de Booking— registra 0 % y NO_REFUND. La ÚNICA excepción es la compensación de una saga fallida
+  // (SAGA_ORCHESTRATOR): la reserva nunca llegó a completarse, así que se devuelve el 100 % (COMPENSATED).
+  private reembolso(solicitadoPor: string): { porcentaje: number; estado: string } {
     if (solicitadoPor === 'SAGA_ORCHESTRATOR') return { porcentaje: 100, estado: 'COMPENSATED' };
-    if (solicitadoPor !== 'CLIENTE') return { porcentaje: 100, estado: 'REFUNDED' };
-    const politica = this.politica(orden);
-    if (!politica.esReembolsable) return { porcentaje: 0, estado: 'NO_REFUND' };
-    if (ahora.getTime() <= this.finVentana(orden, politica).getTime()) return { porcentaje: 100, estado: 'REFUNDED' };
-    const porcentaje = 100 - (politica.penalidadFueraDeVentanaPorcentaje ?? 100);
-    return { porcentaje, estado: porcentaje > 0 ? 'REFUNDED' : 'NO_REFUND' };
+    return { porcentaje: 0, estado: 'NO_REFUND' };
   }
 
   private politica(orden: Orden): PoliticaCancelacion {
@@ -595,9 +599,6 @@ export class OrdenesV2Service {
   // `conClave`: la credencial de la puerta solo se muestra al huésped y al administrador, nunca en listados ni a un servicio.
   aDetalle(orden: Orden, conClave = false) {
     const total = centavosAMoney(aCentavos(Number(orden.totalPrice)));
-    const politica = this.politica(orden);
-    // El contrato fija el check-in en las 14:00 de Guayaquil para todos los alojamientos (§4)
-    const horaLlegada = HORA_CHECKIN;
     const ninos = Array.isArray(orden.guests?.children) ? (orden.guests.children as number[]) : [];
     const base = `/api/v2/alojamientos/orders/${orden.id}`;
     const historial = [{ estado: 'CONFIRMED', en: new Date(orden.createdAt).toISOString() }];
@@ -611,7 +612,8 @@ export class OrdenesV2Service {
       external_order_id: `ORD-HTL-${orden.locator}`,
       externalOrderId: `ORD-HTL-${orden.locator}`,
       codigoReserva: `BK-HOTEL-${orden.locator}`,
-      estado: orden.status,
+      // Los estados internos de limpieza (POR_LIMPIAR, LIMPIA_LISTA) se reportan como CHECKED_OUT hacia el contrato
+      estado: estadoContrato(orden.status),
       ...(orden.sagaId && { saga_id: orden.sagaId }),
       alojamientoId: orden.alojamientoCodigo,
       alojamientoNombre: orden.alojamientoNombre.slice(0, 150),
@@ -639,10 +641,10 @@ export class OrdenesV2Service {
       },
       total,
       currency: orden.currency,
+      // Fase 1: tarifa no reembolsable, siempre
       politicaCancelacionAplicable: {
-        esReembolsable: politica.esReembolsable,
-        ...(politica.esReembolsable && { reembolso100HastaFecha: isoGuayaquil(this.finVentana(orden, politica, horaLlegada)) }),
-        descripcion: politica.descripcion,
+        esReembolsable: false,
+        descripcion: POLITICA_NO_REEMBOLSABLE.descripcion,
       },
       habitacionAsignada: orden.habitacionAsignada ?? null,
       claveAccesoDigital: conClave ? (orden.claveAccesoDigital ?? null) : null,
@@ -652,7 +654,7 @@ export class OrdenesV2Service {
         self: { href: base, method: 'GET' },
         ...(confirmada && { cancel: { href: `${base}/cancel`, method: 'POST' }, checkIn: { href: `${base}/check-in`, method: 'POST' } }),
         ...(orden.status === OrdenStatus.CHECKED_IN && { checkOut: { href: `${base}/checkout`, method: 'POST' } }),
-        ...(orden.status === OrdenStatus.CHECKED_OUT && { resena: { href: `/api/v2/alojamientos/${orden.alojamientoCodigo}/resenas`, method: 'POST' } }),
+        ...(estadoContrato(orden.status) === OrdenStatus.CHECKED_OUT && { resena: { href: `/api/v2/alojamientos/${orden.alojamientoCodigo}/resenas`, method: 'POST' } }),
       },
       ...(orden.planTarifaCodigo && { planTarifaCodigo: orden.planTarifaCodigo }),
       ...(orden.modeloPago && { modeloPago: orden.modeloPago }),

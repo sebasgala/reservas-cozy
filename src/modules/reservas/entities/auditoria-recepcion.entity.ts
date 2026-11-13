@@ -2,7 +2,15 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 
 
 // Bloque R (R9): auditoría LOCAL de la recepción. Cada cambio operativo sobre una reserva deja una fila en la
 // misma transacción que el cambio. Nunca se envía a Booking.
-export const ACCIONES_RECEPCION = ['CHECKIN_APROBADO', 'REASIGNACION_HABITACION', 'CAMBIO_GUEST_COUNT', 'CAMBIO_OBSERVACIONES', 'EARLY_CHECKIN_AUTORIZADO'] as const;
+export const ACCIONES_RECEPCION = [
+  'CHECKIN_APROBADO',
+  'REASIGNACION_HABITACION',
+  'CAMBIO_GUEST_COUNT',
+  'CAMBIO_OBSERVACIONES',
+  'EARLY_CHECKIN_AUTORIZADO',
+  'HABITACION_LIMPIA_LISTA',
+  'RESERVA_ARCHIVADA',
+] as const;
 export type AccionRecepcion = (typeof ACCIONES_RECEPCION)[number];
 
 @Entity({ name: 'auditoria_recepcion', schema: 'reservas' })

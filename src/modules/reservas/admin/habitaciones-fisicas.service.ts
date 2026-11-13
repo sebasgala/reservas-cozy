@@ -4,7 +4,6 @@ import { DataSource, EntityManager } from 'typeorm';
 import { CatalogoPuerto } from '../../catalogo/catalogo.puerto';
 import { ConflictoException, ConsultaInvalidaException, RecursoNoEncontradoException } from '../../comun/problems/problem-details.exceptions';
 import { UsuarioSesion } from '../../usuarios/usuarios.contrato';
-import { Alojamiento } from '../../catalogo/entities/alojamiento.entity';
 import { EstadoLimpieza, HabitacionFisica } from '../entities/habitacion-fisica.entity';
 import { HistorialLimpieza } from '../entities/historial-limpieza.entity';
 import { CONEXION } from '../../../database/conexiones';
@@ -27,7 +26,10 @@ export class HabitacionesFisicasService {
   ) {}
 
   // Lista habitaciones físicas del alojamiento de la sesión
-  async listar(alojamientoId: number): Promise<HabitacionFisica[]> {
+  async listar(alojamientoId: number | null): Promise<HabitacionFisica[]> {
+    if (alojamientoId == null || !Number.isFinite(alojamientoId)) {
+      return [];
+    }
     return this.dataSource.getRepository(HabitacionFisica).find({
       where: { alojamientoId, activa: true },
       order: { numero: 'ASC' },
@@ -49,8 +51,6 @@ export class HabitacionesFisicasService {
         activa: true,
       });
       await manager.save(hf);
-      // Activar controla_limpieza en el alojamiento si no estaba activo
-      await manager.getRepository(Alojamiento).update({ id: alojamientoId, controlaLimpieza: false }, { controlaLimpieza: true });
       return hf;
     });
   }
@@ -124,8 +124,28 @@ export class HabitacionesFisicasService {
     });
   }
 
+  // Limpieza terminada: la habitación vuelve a LIMPIA y queda libre para un nuevo check-in (misma transacción que
+  // marcarHabitacionLista). Libera el vínculo de ocupación físico que el check-out dejó bloqueado (SUCIA/OCUPADA).
+  async marcarLista(manager: EntityManager, habitacionFisicaId: string, reservaId: string | null, usuarioId: string | null, notas?: string): Promise<void> {
+    const hf = await manager.findOneBy(HabitacionFisica, { id: habitacionFisicaId, activa: true });
+    if (!hf) throw new RecursoNoEncontradoException('La habitación física no existe', [{ name: 'habitacionFisicaId', reason: 'no existe' }]);
+    if (hf.estadoLimpieza === EstadoLimpieza.LIMPIA) return;
+    const anterior = hf.estadoLimpieza;
+    hf.estadoLimpieza = EstadoLimpieza.LIMPIA;
+    await manager.save(hf);
+    await manager.insert(HistorialLimpieza, {
+      habitacionFisicaId,
+      reservaId,
+      usuarioId,
+      estadoAnterior: anterior,
+      estadoNuevo: EstadoLimpieza.LIMPIA,
+      motivo: notas?.trim() || 'limpieza completada',
+    });
+  }
+
   async verificaControlaLimpieza(manager: EntityManager, alojamientoId: number): Promise<boolean> {
-    const a = await manager.findOneBy(Alojamiento, { id: alojamientoId });
-    return a?.controlaLimpieza ?? false;
+    // El alojamiento controla la limpieza desde que registra su primera habitación física activa (tabla propia de reservas;
+    // la entidad Alojamiento del catálogo no está registrada en esta conexión)
+    return manager.getRepository(HabitacionFisica).exists({ where: { alojamientoId, activa: true } });
   }
 }

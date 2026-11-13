@@ -36,7 +36,14 @@ export interface OrdenParaEvento {
   status: string;
   alojamientoId: number;
   totalPrice: number;
+  // Para que disponibilidad/ descuente o libere las noches exactas sin leer la orden
+  habitacionCodigo: string;
+  checkin: string;
+  checkout: string;
 }
+
+// Evento INTERNO entre microservicios (no es del contrato B2B): no entra al feed de Booking.
+export const EVENTO_HABITACION_LIMPIA_LISTA = 'habitacion.limpia.lista';
 
 export interface EventoNuevo {
   tipo: TipoEvento;
@@ -79,12 +86,27 @@ export class EventosService {
             ...(orden.sagaId && { saga_id: orden.sagaId }),
             estado: orden.status,
             alojamientoId: alojamientoCodigo,
+            tipoHabitacionCodigo: orden.habitacionCodigo,
+            checkin: orden.checkin,
+            checkout: orden.checkout,
             total: centavosAMoney(aCentavos(Number(orden.totalPrice))),
           },
         },
       ],
       correlacionId,
     );
+  }
+
+  // Evento INTERNO habitacion.limpia.lista: se escribe en outbox_reservas, pero el publicador NO lo copia a
+  // comun.feed_eventos (no es del contrato). Lo consume disponibilidad/ para reabrir el inventario físico.
+  async emitirHabitacionLimpiaLista(
+    manager: EntityManager,
+    sujeto: string,
+    alojamientoId: number,
+    datos: Record<string, unknown>,
+    correlacionId: string | null = null,
+  ): Promise<void> {
+    await manager.query(INSERTAR_EN.reservas, [randomUUID(), EVENTO_HABITACION_LIMPIA_LISTA, sujeto.slice(0, 200), alojamientoId, correlacionId, JSON.stringify(datos)]);
   }
 
   // Último `sequence` publicado (estado de la outbox del panel)

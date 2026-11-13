@@ -25,7 +25,7 @@ const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 export class FiltroRecepcionQueryDto {
   @ApiPropertyOptional({ enum: OrdenStatus })
   @IsOptional()
-  @IsEnum(OrdenStatus, { message: 'debe ser PENDING, CONFIRMED, CHECKED_IN, CHECKED_OUT o CANCELLED' })
+  @IsEnum(OrdenStatus, { message: 'debe ser PENDING, CONFIRMED, CHECKED_IN, CHECKED_OUT, POR_LIMPIAR, LIMPIA_LISTA o CANCELLED' })
   estado?: OrdenStatus;
 
   @ApiPropertyOptional({ description: 'true = vista del mostrador: solo reservas CONFIRMED sin check-in cuya estancia no terminó' })
@@ -51,6 +51,12 @@ export class FiltroRecepcionQueryDto {
   @Min(1)
   @Max(2147483647)
   alojamientoId?: number;
+
+  @ApiPropertyOptional({ description: 'true para incluir o consultar archivadas; false solo activas', type: Boolean })
+  @IsOptional()
+  @Transform(({ value }) => (value === 'true' ? true : value === 'false' ? false : value))
+  @IsBoolean({ message: 'debe ser true o false' })
+  archivadaRecepcion?: boolean;
 
   @ApiPropertyOptional({ type: 'integer', default: 1 })
   @IsOptional()
@@ -144,6 +150,23 @@ export class CambiarObservacionesDto extends MotivoRecepcionDto {
   observaciones: string;
 }
 
+// POST /admin/recepcion/reservas/:id/habitacion-limpia (Fase 2: POR_LIMPIAR → LIMPIA_LISTA)
+export class MarcarHabitacionListaDto {
+  @ApiPropertyOptional({ format: 'uuid', description: 'Si se omite, se usa la habitación física asignada en el check-in' })
+  @IsOptional()
+  @IsUUID('all')
+  habitacionFisicaId?: string;
+
+  @ApiPropertyOptional({ maxLength: 300 })
+  @IsOptional()
+  @MaxLength(300)
+  @IsString()
+  notas?: string;
+}
+
+// POST /admin/recepcion/reservas/:id/archivar (Fase 2: saca del tablero una reserva CANCELLED o LIMPIA_LISTA)
+export class ArchivarReservaDto extends MotivoRecepcionDto {}
+
 // POST /admin/recepcion/reservas/:id/early-checkin
 export class AutorizarEarlyCheckinDto extends MotivoRecepcionDto {
   @ApiPropertyOptional({ format: 'date-time' })
@@ -180,6 +203,7 @@ export class ReservaRecepcionDto {
   @ApiProperty({ format: 'date-time' }) checkinHabilitadoDesde: string;
   @ApiProperty({ format: 'date-time' }) checkinCierraEn: string;
   @ApiPropertyOptional({ nullable: true, format: 'date-time' }) checkInEn: string | null;
+  @ApiProperty() archivadaRecepcion: boolean;
 }
 
 export class ReservasRecepcionPaginadasDto {

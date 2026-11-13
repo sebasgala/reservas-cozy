@@ -1,6 +1,7 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseFilters, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseFilters, UseGuards, UsePipes } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Matches, MaxLength, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { EstadoLimpieza, HabitacionFisica } from '../entities/habitacion-fisica.entity';
 import { RolUsuario, UsuarioSesion as Usuario } from '../../usuarios/usuarios.contrato';
@@ -23,6 +24,15 @@ export class CrearHabitacionFisicaBodyDto implements CrearHabitacionFisicaDto {
   @Matches(/\S/, { message: 'no puede estar vacío' })
   @IsString()
   numero: string;
+}
+
+export class FiltroHabitacionesFisicasQueryDto {
+  @ApiPropertyOptional({ type: 'integer', description: 'Id del alojamiento (opcional para superadmin)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  alojamientoId?: number;
 }
 
 export class ActualizarLimpiezaBodyDto implements ActualizarLimpiezaDto {
@@ -53,8 +63,12 @@ export class HabitacionesFisicasController {
   @ApiResponse({ status: 200, type: [HabitacionFisica] })
   @ApiResponse(respuestaProblema(401, 'UNAUTHORIZED'))
   @ApiResponse(respuestaProblema(403, 'FORBIDDEN'))
-  listar(@AlojamientoActual() alojamientoId: number | null) {
-    return this.service.listar(alojamientoId);
+  listar(
+    @AlojamientoActual() alojamientoId: number | null,
+    @Query() query?: FiltroHabitacionesFisicasQueryDto,
+  ) {
+    const id = alojamientoId ?? (query?.alojamientoId ? Number(query.alojamientoId) : null);
+    return this.service.listar(id);
   }
 
   @Post()

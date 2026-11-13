@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { OrdenStatus } from '../entities/orden.entity';
+import { estadoContrato, OrdenStatus } from '../entities/orden.entity';
 import { Resena } from '../entities/resena.entity';
 import { PrincipalV2 } from '../../usuarios/v2/autenticacion-v2';
 import { nombrePublico } from './checkin';
@@ -66,7 +66,9 @@ export class ResenasV2Service {
     // Solo el titular: la reseña de otra persona es un 403, no un 404 (la reserva existe)
     if (orden.clienteId !== principal.usuarioId) throw new ProblemaV2Exception(403, 'FORBIDDEN', 'Esta reserva no es tuya.');
     if (orden.alojamientoId !== aloj.id) throw noEncontrado(`El alojamiento '${codigo}' no tiene la reserva '${dto.reservaId}'.`);
-    if (orden.status !== OrdenStatus.CHECKED_OUT) {
+    // Tras el check-out la reserva puede estar en POR_LIMPIAR o LIMPIA_LISTA (limpieza interna): todas son CHECKED_OUT
+    // hacia el contrato, así que el huésped ya puede reseñar.
+    if (estadoContrato(orden.status) !== OrdenStatus.CHECKED_OUT) {
       throw new ProblemaV2Exception(409, 'INVALID_STATE_TRANSITION', `Solo se puede reseñar una reserva en estado CHECKED_OUT (la reserva está ${orden.status}).`);
     }
     const repo = this.dataSource.getRepository(Resena);

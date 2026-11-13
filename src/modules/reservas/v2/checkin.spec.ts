@@ -76,11 +76,15 @@ describe('apoyo de la estancia', () => {
     expect(fechaGuayaquil(en('2026-11-01T05:00:00Z'))).toBe('2026-11-01');
   });
 
-  it('el documento se compara sin mayúsculas ni espacios, y una reserva sin documento nunca coincide', () => {
+  it('el documento se compara sin mayúsculas ni espacios, tolera números y guiones, y una reserva sin documento nunca coincide', () => {
     expect(mismoDocumento(' ab123456 ', 'AB123456')).toBe(true);
     expect(mismoDocumento('1712345675', '1712345676')).toBe(false);
     expect(mismoDocumento('1712345675', undefined)).toBe(false);
     expect(mismoDocumento('1712345675', '')).toBe(false);
+    expect(mismoDocumento('1712345675', 1712345675)).toBe(true);
+    expect(mismoDocumento(1712345675, '1712345675')).toBe(true);
+    expect(mismoDocumento('171234567-5', '1712345675')).toBe(true);
+    expect(mismoDocumento('1712345675', '171234567-5')).toBe(true);
   });
 
   it('el nombre público es "Nombre I."', () => {
