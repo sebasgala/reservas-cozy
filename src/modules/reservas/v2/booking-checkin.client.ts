@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { registrarV2 } from '../../comun/v2/registro-v2';
 
 export interface NotificarCheckinBookingRequest {
+  order_id?: string;
   external_order_id: string;
   client_id: string;
   estado: 'CONFIRMADO_ASISTIDO';
@@ -34,6 +35,7 @@ export interface RegistroCheckinBooking {
 }
 
 export interface ParametrosCheckinBooking {
+  order_id?: string;
   external_order_id: string;
   client_id: string;
   huespedes_reales: number;
@@ -93,6 +95,7 @@ export function construirCuerpoCheckinBooking(params: ParametrosCheckinBooking):
       : TEXTO_OBSERVACIONES_POR_DEFECTO;
 
   return {
+    ...(params.order_id ? { order_id: params.order_id } : {}),
     external_order_id: params.external_order_id,
     client_id: params.client_id,
     estado: 'CONFIRMADO_ASISTIDO',
@@ -126,7 +129,11 @@ export class BookingCheckinClient implements OnModuleInit {
   }
 
   get bookingUrl(): string {
-    return this.bookingUrlCustom || process.env.BOOKING_URL || 'http://localhost:3000';
+    if (this.bookingUrlCustom) return this.bookingUrlCustom;
+    if (process.env.BOOKING_URL) return process.env.BOOKING_URL;
+    return process.env.NODE_ENV === 'production'
+      ? 'https://booking-core-api.azurewebsites.net'
+      : 'http://localhost:3000';
   }
 
   get apiKey(): string {
@@ -141,6 +148,7 @@ export class BookingCheckinClient implements OnModuleInit {
     payload: NotificarCheckinBookingRequest,
     correlacionId?: string | null,
     fetchFn: typeof fetch = fetch,
+    referenciasAlternativas: string[] = [],
   ): Promise<ResultadoNotificacionBooking> {
     if (!this.notificacionHabilitada) {
       registrarV2('warn', 'booking_checkin_omitido', {
@@ -152,7 +160,9 @@ export class BookingCheckinClient implements OnModuleInit {
     }
 
     const base = this.bookingUrl.replace(/\/+$/, '');
-    const url = `${base}/api/v1/reservas/${encodeURIComponent(payload.external_order_id)}/checkin`;
+    const candidatos = Array.from(
+      new Set([payload.external_order_id, ...referenciasAlternativas].filter((v) => v && v.trim().length > 0)),
+    );
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -160,41 +170,59 @@ export class BookingCheckinClient implements OnModuleInit {
       ...(correlacionId ? { 'X-Correlation-ID': correlacionId } : {}),
     };
 
-    try {
-      const res = await fetchFn(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
+    let ultimoResultado: ResultadoNotificacionBooking = { exito: false, error: 'Sin referencias para notificar' };
 
-      const texto = await res.text();
-      let cuerpo: unknown = null;
+    for (const ref of candidatos) {
+      const url = `${base}/api/v1/reservas/${encodeURIComponent(ref)}/checkin`;
+      const cuerpoEnvio: NotificarCheckinBookingRequest = {
+        ...payload,
+        order_id: ref,
+        external_order_id: ref,
+      };
+
       try {
-        cuerpo = texto ? JSON.parse(texto) : null;
-      } catch {
-        cuerpo = texto;
-      }
+        const res = await fetchFn(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(cuerpoEnvio),
+        });
 
-      if (!res.ok) {
-        return {
+        const texto = await res.text();
+        let cuerpo: unknown = null;
+        try {
+          cuerpo = texto ? JSON.parse(texto) : null;
+        } catch {
+          cuerpo = texto;
+        }
+
+        if (res.ok) {
+          return {
+            exito: true,
+            estadoHttp: res.status,
+            respuesta: cuerpo,
+          };
+        }
+
+        ultimoResultado = {
           exito: false,
           estadoHttp: res.status,
           error: `Error de Booking (${res.status}): ${typeof cuerpo === 'object' && cuerpo && 'detail' in (cuerpo as any) ? (cuerpo as any).detail : texto || res.statusText}`,
           respuesta: cuerpo,
         };
-      }
 
-      return {
-        exito: true,
-        estadoHttp: res.status,
-        respuesta: cuerpo,
-      };
-    } catch (err) {
-      return {
-        exito: false,
-        error: `Fallo de comunicación con Booking: ${(err as Error).message}`,
-      };
+        // Solo probamos otra referencia si Booking respondió 404 (no encontró ese ID)
+        if (res.status !== 404) {
+          return ultimoResultado;
+        }
+      } catch (err) {
+        return {
+          exito: false,
+          error: `Fallo de comunicación con Booking: ${(err as Error).message}`,
+        };
+      }
     }
+
+    return ultimoResultado;
   }
 
   async guardarResultado(

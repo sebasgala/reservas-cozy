@@ -127,7 +127,7 @@ describe('Ciclo completo de estados hacia Booking (Check-in -> Check-out -> Limp
     assert.equal(eventosEmitidos[0].datos.external_order_id, 'ORD-HTL-CP83XEYF');
 
     assert.equal(llamadasBooking.length, 1);
-    assert.equal(llamadasBooking[0].url, 'https://booking-prod.example.com/api/v1/reservas/ORD-HTL-CP83XEYF/checkin');
+    assert.equal(llamadasBooking[0].url, 'https://booking-prod.example.com/api/v1/reservas/11111111-1111-4111-8111-111111111111/checkin');
     assert.equal(llamadasBooking[0].headers['X-API-Key'], 'secret-booking-key');
     assert.equal(llamadasBooking[0].body.estado, 'CONFIRMADO_ASISTIDO');
 

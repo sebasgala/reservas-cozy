@@ -198,14 +198,18 @@ export class RecepcionService {
     if (!this.bookingClient) return;
     try {
       const payloadBooking = this.bookingClient.construirPayload({
-        external_order_id: `ORD-HTL-${orden.locator}`,
+        order_id: orden.id,
+        external_order_id: orden.id,
         client_id: orden.clienteId ?? orden.id,
         huespedes_reales: dto.huespedesPresentes,
         admin_id: usuario.id ?? 'admin-recepcion',
         fecha_checkin: ahora,
         observaciones: dto.observaciones?.trim() || null,
       });
-      const resBooking = await this.bookingClient.notificarCheckin(payloadBooking, null);
+      const resBooking = await this.bookingClient.notificarCheckin(payloadBooking, null, undefined, [
+        `ORD-HTL-${orden.locator}`,
+        `BK-HOTEL-${orden.locator}`,
+      ]);
       if (!resBooking.omitido) {
         await this.bookingClient.guardarResultado(orden.id, payloadBooking, resBooking, null);
       }
