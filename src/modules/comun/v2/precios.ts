@@ -11,8 +11,8 @@
 //
 // Cada línea se redondea una vez y las sumas son de enteros, así que el total cuadra exacto (tolerancia 0).
 
-export const IVA_PORCENTAJE = 15;
-export const TASA_MUNICIPAL_CENTAVOS = 200; // por noche y por habitación
+export const IVA_PORCENTAJE = 0;
+export const TASA_MUNICIPAL_CENTAVOS = 0; // sin tasa municipal: solo suma de habitaciones
 
 // round_half_up(numerador / denominador) para enteros no negativos
 export function divisionHalfUp(numerador: number, denominador: number): number {

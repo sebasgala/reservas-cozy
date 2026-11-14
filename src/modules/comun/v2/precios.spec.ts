@@ -17,13 +17,14 @@ test('divisionHalfUp: el .5 sube, lo demás redondea al más cercano', () => {
   assert.throws(() => divisionHalfUp(-1, 2));
 });
 
-test('IVA 15 %: half-up a centavos', () => {
-  assert.equal(ivaDe(48000), 7200); // 480.00 => 72.00
-  assert.equal(ivaDe(1003), 150); // 1.5045 => 1.50
-  assert.equal(ivaDe(1010), 152); // 1.515 => 1.52 (half-up, no al par)
-  assert.equal(ivaDe(10), 2); // 0.015 => 0.02
-  assert.equal(ivaDe(3), 0); // 0.0045 => 0.00
-  assert.equal(ivaDe(4), 1); // 0.006 => 0.01
+test('IVA: 0 % por defecto y half-up cuando se indica porcentaje explícito', () => {
+  assert.equal(ivaDe(48000), 0);
+  assert.equal(ivaDe(48000, 15), 7200); // 480.00 => 72.00
+  assert.equal(ivaDe(1003, 15), 150); // 1.5045 => 1.50
+  assert.equal(ivaDe(1010, 15), 152); // 1.515 => 1.52 (half-up, no al par)
+  assert.equal(ivaDe(10, 15), 2); // 0.015 => 0.02
+  assert.equal(ivaDe(3, 15), 0); // 0.0045 => 0.00
+  assert.equal(ivaDe(4, 15), 1); // 0.006 => 0.01
 });
 
 test('Ajuste del plan: −10 % sobre 85.55 da 77.00 (76.995 sube)', () => {
@@ -40,14 +41,14 @@ test('Reparto de adultos entre habitaciones', () => {
   assert.deepEqual(repartir(1, 3), [1, 0, 0]);
 });
 
-test('Ejemplo del contrato: 4 noches a 120.00 => 480.00 + 72.00 + 8.00 = 560.00', () => {
+test('Suma solo habitaciones sin IVA ni tasa: 4 noches a 120.00 => 480.00', () => {
   const d = calcularPrecio({ noches: noches(12000, 12000, 12000, 12000), plan: SIN_AJUSTE, habitaciones: 1, adultos: 2, edadesNinos: [] });
   assert.equal(d.subtotal, 48000);
-  assert.equal(d.ivaPorcentaje, 15);
-  assert.equal(d.ivaValor, 7200);
-  assert.equal(d.tasaMunicipal, 800);
+  assert.equal(d.ivaPorcentaje, 0);
+  assert.equal(d.ivaValor, 0);
+  assert.equal(d.tasaMunicipal, 0);
   assert.equal(d.descuentoCombo, 0);
-  assert.equal(centavosAMoney(d.total), '560.00');
+  assert.equal(centavosAMoney(d.total), '480.00');
   assert.equal(d.precioNocheCentavos, 12000);
 });
 
@@ -56,9 +57,9 @@ test('Cada noche se redondea una vez y la suma cuadra exacta', () => {
   const d = calcularPrecio({ noches: noches(8555, 8555), plan: { ...SIN_AJUSTE, ajusteCentesimas: -1000 }, habitaciones: 2, adultos: 4, edadesNinos: [] });
   assert.deepEqual(d.nochesDetalle.map((n) => n.centavos), [15400, 15400]);
   assert.equal(d.subtotal, 30800);
-  assert.equal(d.ivaValor, 4620);
+  assert.equal(d.ivaValor, 0);
   assert.equal(d.tasaMunicipal, TASA_MUNICIPAL_CENTAVOS * 2 * 2);
-  assert.equal(d.total, 30800 + 4620 + 800);
+  assert.equal(d.total, 30800);
 });
 
 test('Suplementos: adultos sobre la ocupación base y niños mayores de la edad gratis, por noche', () => {
@@ -71,7 +72,7 @@ test('Suplementos: adultos sobre la ocupación base y niños mayores de la edad 
 
 test('Descuento de combo: se resta al final y no puede dejar el total negativo', () => {
   const d = calcularPrecio({ noches: noches(12000, 12000, 12000, 12000), plan: SIN_AJUSTE, habitaciones: 1, adultos: 2, edadesNinos: [], descuentoComboCentavos: 4800 });
-  assert.equal(d.total, 56000 - 4800);
+  assert.equal(d.total, 48000 - 4800);
   assert.throws(() => calcularPrecio({ noches: noches(100), plan: SIN_AJUSTE, habitaciones: 1, adultos: 1, edadesNinos: [], descuentoComboCentavos: 999999 }));
 });
 
@@ -106,10 +107,10 @@ test('Propiedad: con 2000 combinaciones el total cuadra exacto y el IVA es half-
     assert.ok(d.nochesDetalle.every((x) => Number.isInteger(x.centavos) && x.centavos >= 0));
     assert.equal(d.subtotal, d.nochesDetalle.reduce((s, x) => s + x.centavos, 0));
     assert.equal(d.total, d.subtotal + d.ivaValor + d.tasaMunicipal - d.descuentoCombo);
-    // half-up exacto: 100·iva − 15·subtotal ∈ (−50, 50]. El empate (exactamente ,5 centavos) sube y da +50.
-    const diferencia = 100 * d.ivaValor - 15 * d.subtotal;
+    // Con IVA 0% por defecto, ivaValor y tasaMunicipal son 0
+    const diferencia = 100 * d.ivaValor - d.ivaPorcentaje * d.subtotal;
     assert.ok(diferencia > -50 && diferencia <= 50, `IVA ${d.ivaValor} de ${d.subtotal}`);
-    assert.equal(d.tasaMunicipal, 200 * n * habitaciones);
+    assert.equal(d.tasaMunicipal, TASA_MUNICIPAL_CENTAVOS * n * habitaciones);
     assert.match(centavosAMoney(d.total), /^(0|[1-9][0-9]{0,8})\.[0-9]{2}$/);
   }
 });
