@@ -165,7 +165,7 @@ export class MarcarHabitacionListaDto {
 }
 
 // POST /admin/recepcion/reservas/:id/archivar (Fase 2: saca del tablero una reserva CANCELLED o LIMPIA_LISTA)
-export class ArchivarReservaDto extends MotivoRecepcionDto {}
+export class ArchivarReservaDto extends MotivoRecepcionDto { }
 
 // POST /admin/recepcion/reservas/:id/early-checkin
 export class AutorizarEarlyCheckinDto extends MotivoRecepcionDto {

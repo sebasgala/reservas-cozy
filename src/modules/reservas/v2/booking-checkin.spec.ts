@@ -125,7 +125,7 @@ describe('Paso 5: Cliente saliente de check-in hacia Booking', () => {
 
       await cliente.notificarCheckin(payload, 'corr-test-123', mockFetch);
 
-      assert.equal(urlLlamada, 'http://mock-booking.local/api/v2/reservas/ORD-HTL-9981/checkin');
+      assert.equal(urlLlamada, 'http://mock-booking.local/api/v1/reservas/ORD-HTL-9981/checkin');
       assert.equal(headersRecibidos['Content-Type'], 'application/json');
       assert.equal(headersRecibidos['X-API-Key'], 'clave-secreta-xyz');
       assert.equal(headersRecibidos['X-Correlation-ID'], 'corr-test-123');

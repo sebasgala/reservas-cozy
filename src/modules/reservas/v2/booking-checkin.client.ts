@@ -152,7 +152,7 @@ export class BookingCheckinClient implements OnModuleInit {
     }
 
     const base = this.bookingUrl.replace(/\/+$/, '');
-    const url = `${base}/api/v2/reservas/${encodeURIComponent(payload.external_order_id)}/checkin`;
+    const url = `${base}/api/v1/reservas/${encodeURIComponent(payload.external_order_id)}/checkin`;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

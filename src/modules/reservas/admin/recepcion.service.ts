@@ -48,7 +48,7 @@ export class RecepcionService {
     private readonly habitacionesFisicas: HabitacionesFisicasService,
     private readonly eventos: EventosService,
     @Optional() private readonly bookingClient?: BookingCheckinClient,
-  ) {}
+  ) { }
 
   async contexto(usuario: UsuarioSesion): Promise<ContextoRecepcionDto> {
     if (usuario.alojamientoId == null) return { alojamientoId: null, alojamientoNombre: null, alojamientoCodigo: null };
